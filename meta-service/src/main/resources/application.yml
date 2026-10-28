@@ -1,0 +1,43 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: meta-service
+  datasource:
+    url: ${UGAME_DB_URL:jdbc:postgresql://localhost:5432/ugame}
+    username: ${UGAME_DB_USER:ugame}
+    password: ${UGAME_DB_PASSWORD:ugame}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate   # схему ведёт только Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: ${UGAME_REDIS_HOST:localhost}
+      port: ${UGAME_REDIS_PORT:6379}
+
+ugame:
+  jwt:
+    # Только для разработки! В проде задайте UGAME_JWT_SECRET (Base64, >= 32 байт):
+    #   openssl rand -base64 32
+    secret: ${UGAME_JWT_SECRET:gTq19YofY0MUuYR50Vm2rdeaybZHByPdbdAwYdlHeAI=}
+    issuer: ugame-meta
+    access-ttl: 15m
+    refresh-ttl: 30d
+  matchmaking:
+    # 6 для 3×3. Для отладки с одним-двумя клиентами поставьте 1 или 2.
+    players-per-match: ${UGAME_PLAYERS_PER_MATCH:2}
+    ticket-ttl: 60s
+    poll-interval: 500ms
+    fallback-server-host: 127.0.0.1
+    fallback-server-port: 7777
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -1,0 +1,64 @@
+// Надёжные (reliable) сообщения игрового сервера.
+// Этот же файл используется для генерации C#-классов в Unity (Google.Protobuf).
+//
+// На проводе каждое сообщение предваряется 1 байтом типа (см. MessageType.java / MessageType.cs),
+// затем идут байты protobuf. Частые ненадёжные пакеты (ввод, снапшоты) Protobuf НЕ используют —
+// они упаковываются вручную, см. InputPacket / SnapshotPacket.
+
+syntax = "proto3";
+
+package ugame;
+
+option java_package = "com.ugame.protocol.pb";
+option java_multiple_files = true;
+option csharp_namespace = "UGame.Protocol";
+
+// C2S: первое сообщение клиента после KCP-рукопожатия.
+message JoinRequest {
+  string ticket = 1;         // одноразовый билет из мета-сервиса (GET /api/matchmaking/status)
+  string client_version = 2;
+}
+
+// S2C: ответ на JoinRequest.
+message JoinResult {
+  bool ok = 1;
+  string error = 2;          // код ошибки, если ok == false
+  uint32 entity_id = 3;      // id сущности игрока в матче
+  uint32 team = 4;
+  uint32 tick_rate = 5;      // тиков в секунду
+  string match_id = 6;
+}
+
+message PlayerInfo {
+  uint32 entity_id = 1;
+  int64 player_id = 2;
+  string username = 3;
+  uint32 team = 4;
+}
+
+// S2C: все игроки собрались, матч начался.
+message MatchStart {
+  string match_id = 1;
+  repeated PlayerInfo players = 2;
+  uint32 duration_sec = 3;
+  uint32 start_tick = 4;
+}
+
+message PlayerResult {
+  int64 player_id = 1;
+  uint32 team = 2;
+  uint32 kills = 3;
+  uint32 deaths = 4;
+}
+
+// S2C: матч завершён.
+message MatchEnd {
+  string match_id = 1;
+  int32 winner_team = 2;     // -1 = ничья
+  repeated PlayerResult results = 3;
+}
+
+// S2C: сервер отключает клиента с причиной.
+message Kick {
+  string reason = 1;
+}

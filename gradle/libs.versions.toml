@@ -1,0 +1,33 @@
+[versions]
+spring-boot = "4.1.1"
+netty = "4.1.118.Final"
+kcp = "1.6.2"
+protobuf = "4.31.1"
+protobuf-plugin = "0.10.0"
+lettuce = "6.6.0.RELEASE"
+slf4j = "2.0.17"
+logback = "1.5.18"
+junit = "5.12.2"
+
+[libraries]
+netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
+netty-buffer = { module = "io.netty:netty-buffer" }
+netty-transport = { module = "io.netty:netty-transport" }
+netty-epoll-classes = { module = "io.netty:netty-transport-classes-epoll" }
+netty-epoll-native = { module = "io.netty:netty-transport-native-epoll" }
+
+# Ядро алгоритма KCP (класс kcp.Kcp). Высокоуровневую обвязку kcp2k пишем сами.
+kcp-base = { module = "com.github.l42111996:kcp-base", version.ref = "kcp" }
+
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
+
+lettuce = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+protobuf = { id = "com.google.protobuf", version.ref = "protobuf-plugin" }
