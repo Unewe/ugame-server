@@ -1,26 +1,13 @@
 server:
   port: 8080
 
-spring:
-  application:
-    name: meta-service
-  datasource:
-    url: ${UGAME_DB_URL:jdbc:postgresql://localhost:5432/ugame}
-    username: ${UGAME_DB_USER:ugame}
-    password: ${UGAME_DB_PASSWORD:ugame}
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate   # схему ведёт только Flyway
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-  data:
-    redis:
-      host: ${UGAME_REDIS_HOST:localhost}
-      port: ${UGAME_REDIS_PORT:6379}
-
 ugame:
+  db:
+    host: ${UGAME_DB_HOST:localhost}
+    port: ${UGAME_DB_PORT:5430}
+    name: ${UGAME_DB_NAME:ugame}
+    username: ${UGAME_DB_USER:postgres}
+    password: ${UGAME_DB_PASSWORD:postgres}
   jwt:
     # Только для разработки! В проде задайте UGAME_JWT_SECRET (Base64, >= 32 байт):
     #   openssl rand -base64 32
@@ -35,6 +22,22 @@ ugame:
     poll-interval: 500ms
     fallback-server-host: 127.0.0.1
     fallback-server-port: 7777
+
+spring:
+  application:
+    name: meta-service
+  # Неблокирующий драйвер PostgreSQL. Flyway (JDBC) берёт те же ugame.db.* — см. DatabaseMigration.
+  r2dbc:
+    url: r2dbc:postgresql://${ugame.db.host}:${ugame.db.port}/${ugame.db.name}
+    username: ${ugame.db.username}
+    password: ${ugame.db.password}
+    pool:
+      initial-size: 5
+      max-size: 20
+  data:
+    redis:
+      host: ${UGAME_REDIS_HOST:localhost}
+      port: ${UGAME_REDIS_PORT:6379}
 
 management:
   endpoints:

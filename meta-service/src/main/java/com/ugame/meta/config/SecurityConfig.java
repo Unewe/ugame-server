@@ -8,37 +8,42 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
+import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
-import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
 
 /**
- * Stateless-безопасность: клиент получает JWT через /api/auth/*, затем шлёт его в заголовке
- * {@code Authorization: Bearer <token>}. Проверку подписи делает стандартный resource server.
+ * Stateless-безопасность для WebFlux: клиент получает JWT через /api/auth/*, затем шлёт его в заголовке
+ * {@code Authorization: Bearer <token>}. Подпись проверяет реактивный resource server.
  */
 @Configuration
+@EnableWebFluxSecurity
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-                .csrf(csrf -> csrf.disable()) // нет cookie-сессий — CSRF не нужен
-                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
+    SecurityWebFilterChain securityFilterChain(ServerHttpSecurity http) {
+        return http
+                .csrf(ServerHttpSecurity.CsrfSpec::disable) // нет cookie-сессий — CSRF не нужен
+                .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
+                .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
+                .logout(ServerHttpSecurity.LogoutSpec::disable)
+                .securityContextRepository(NoOpServerSecurityContextRepository.getInstance()) // без сессий
+                .authorizeExchange(ex -> ex
+                        .pathMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
                                 "/api/auth/refresh", "/api/auth/logout").permitAll()
-                        .requestMatchers("/actuator/health", "/actuator/info", "/error").permitAll()
-                        .anyRequest().authenticated())
-                .oauth2ResourceServer(rs -> rs.jwt(Customizer.withDefaults()));
-        return http.build();
+                        .pathMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .anyExchange().authenticated())
+                .oauth2ResourceServer(rs -> rs.jwt(Customizer.withDefaults()))
+                .build();
     }
 
     @Bean
@@ -50,14 +55,17 @@ public class SecurityConfig {
         return new SecretKeySpec(key, "HmacSHA256");
     }
 
+    /** Подпись токена — чистые вычисления в памяти, блокировок нет. */
     @Bean
     JwtEncoder jwtEncoder(SecretKey key) {
         return new NimbusJwtEncoder(new ImmutableSecret<>(key));
     }
 
     @Bean
-    JwtDecoder jwtDecoder(SecretKey key, UgameProperties props) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
+    ReactiveJwtDecoder jwtDecoder(SecretKey key, UgameProperties props) {
+        NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withSecretKey(key)
+                .macAlgorithm(MacAlgorithm.HS256)
+                .build();
         decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(props.jwt().issuer()));
         return decoder;
     }

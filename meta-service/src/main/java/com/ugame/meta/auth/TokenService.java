@@ -9,14 +9,15 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
-import java.util.Optional;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
 
 /**
  * Access-токен — короткоживущий JWT (HS256), проверяется без обращения к БД.
@@ -25,49 +26,48 @@ import org.springframework.stereotype.Service;
  * работает максимум до первого обновления настоящим владельцем.
  */
 @Service
+@RequiredArgsConstructor
 public class TokenService {
     private static final String REFRESH_PREFIX = "ugame:refresh:";
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final JwtEncoder jwtEncoder;
-    private final StringRedisTemplate redis;
-    private final UgameProperties.Jwt props;
-    private final SecureRandom random = new SecureRandom();
+    private final ReactiveStringRedisTemplate redis;
+    private final UgameProperties props;
 
-    public TokenService(JwtEncoder jwtEncoder, StringRedisTemplate redis, UgameProperties props) {
-        this.jwtEncoder = jwtEncoder;
-        this.redis = redis;
-        this.props = props.jwt();
-    }
-
-    public AuthDtos.TokenResponse issue(Player player) {
+    public Mono<AuthDtos.TokenResponse> issue(Player player) {
+        UgameProperties.Jwt jwt = props.jwt();
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()
-                .issuer(props.issuer())
+                .issuer(jwt.issuer())
                 .subject(player.getId().toString())
                 .issuedAt(now)
-                .expiresAt(now.plus(props.accessTtl()))
+                .expiresAt(now.plus(jwt.accessTtl()))
                 .claim("username", player.getUsername())
                 .build();
-        JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
-        String access = jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+        String access = jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
+                .getTokenValue();
+        String refresh = randomToken();
 
+        return redis.opsForValue()
+                .set(REFRESH_PREFIX + sha256(refresh), player.getId().toString(), jwt.refreshTtl())
+                .thenReturn(new AuthDtos.TokenResponse(access, refresh, jwt.accessTtl().toSeconds(),
+                        player.getId(), player.getUsername()));
+    }
+
+    /** Погасить refresh-токен (GETDEL). Пустой Mono — токен недействителен. */
+    public Mono<Long> consumeRefreshToken(String refreshToken) {
+        return redis.opsForValue().getAndDelete(REFRESH_PREFIX + sha256(refreshToken)).map(Long::parseLong);
+    }
+
+    public Mono<Void> revoke(String refreshToken) {
+        return redis.delete(REFRESH_PREFIX + sha256(refreshToken)).then();
+    }
+
+    private static String randomToken() {
         byte[] raw = new byte[32];
-        random.nextBytes(raw);
-        String refresh = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
-        redis.opsForValue().set(REFRESH_PREFIX + sha256(refresh), player.getId().toString(), props.refreshTtl());
-
-        return new AuthDtos.TokenResponse(access, refresh, props.accessTtl().toSeconds(), player.getId(),
-                player.getUsername());
-    }
-
-    /** Погасить refresh-токен. Возвращает id игрока, если токен был действителен. */
-    public Optional<Long> consumeRefreshToken(String refreshToken) {
-        String playerId = redis.opsForValue().getAndDelete(REFRESH_PREFIX + sha256(refreshToken));
-        return Optional.ofNullable(playerId).map(Long::parseLong);
-    }
-
-    public void revoke(String refreshToken) {
-        redis.delete(REFRESH_PREFIX + sha256(refreshToken));
+        RANDOM.nextBytes(raw);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
     }
 
     private static String sha256(String value) {

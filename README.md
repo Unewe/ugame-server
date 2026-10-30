@@ -5,7 +5,7 @@
 ```
                  HTTP (JSON, JWT)                       UDP (kcp2k)
  Unity ───────────────────────────▶ meta-service    Unity ───────────────▶ game-server
- клиент   регистрация, вход,          Spring Boot     клиент  JoinRequest(ticket),   Netty + KCP
+ клиент   регистрация, вход,          WebFlux         клиент  JoinRequest(ticket),   Netty + KCP
           профиль, матчмейкинг            │                   ввод 30 Гц / снапшоты      │
                                           │                                              │
                                           ▼                                              ▼
@@ -16,7 +16,7 @@
 |---|---|
 | `protocol` | `game.proto` (надёжные сообщения) и ручная бинарная упаковка частых пакетов (`InputPacket`, `SnapshotPacket`) |
 | `game-server` | UDP-сервер на Netty, совместимый с **kcp2k**; комнаты матчей с фиксированным тиком; работа с Redis через Lettuce |
-| `meta-service` | Spring Boot 4: регистрация, вход, JWT + refresh-токены, профиль, матчмейкинг, приём результатов матчей |
+| `meta-service` | Spring Boot 4 + **WebFlux** (реактивный, неблокирующий): регистрация, вход, JWT + refresh-токены, профиль, матчмейкинг, приём результатов матчей. PostgreSQL через R2DBC, Redis через реактивный Lettuce, Lombok |
 | `unity-client` | C#-скрипты для Unity: протокол, подключение через kcp2k, HTTP-клиент мета-сервиса |
 
 ## Быстрый старт
@@ -87,6 +87,30 @@ curl        localhost:8080/api/matchmaking/status -H "Authorization: Bearer $TOK
 В снапшоте есть `ackInputSeq` — номер последней обработанной команды игрока для
 client-side prediction и сверки.
 
+## meta-service: реактивный стек
+
+Сервис полностью неблокирующий: запросы обслуживает небольшой пул потоков Netty, а каждый
+обработчик возвращает `Mono`/`Flux`.
+
+| Задача | Чем сделано |
+|---|---|
+| HTTP | Spring WebFlux (Reactor Netty) |
+| Безопасность | Spring Security для WebFlux, `ReactiveJwtDecoder` |
+| PostgreSQL | Spring Data R2DBC + `r2dbc-postgresql`; счётчики игрока — атомарный `UPDATE` |
+| Транзакции | `TransactionalOperator` (`mono.as(tx::transactional)`) |
+| Redis | `ReactiveStringRedisTemplate`; `SCAN` вместо `KEYS` |
+| Фоновые задачи | `Flux.interval` вместо `@Scheduled`, без наложения запусков |
+| Миграции | Flyway через JDBC — один раз при старте, до приёма запросов |
+| bcrypt | на `Schedulers.boundedElastic()`, чтобы не занимать потоки event loop |
+
+Правило для нового кода: внутри `Mono`/`Flux` нельзя вызывать блокирующие API (JDBC, `RestTemplate`,
+`Thread.sleep`, `.block()`). Если без этого никак — `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())`.
+
+**Lombok** подключён только в meta-service: `@RequiredArgsConstructor` для внедрения зависимостей,
+`@Slf4j` для логгера, `@Getter`/`@Builder` для сущности `Player`. DTO оставлены Java-записями (`record`) —
+они и так компактны. В IntelliJ IDEA плагин Lombok встроен; включите
+*Settings → Build → Compiler → Annotation Processors → Enable annotation processing*.
+
 ## Потоки в игровом сервере
 
 - **1 поток event loop Netty**: приём UDP, KCP update каждые 10 мс, отправка. Без блокировок.
@@ -123,7 +147,7 @@ client-side prediction и сверки.
 
 - `game-server/src/main/resources/game-server.properties` — любой ключ переопределяется переменной
   `UGAME_<КЛЮЧ>` (`UGAME_UDP_PORT=7778`) или `-Dugame.udp.port=7778`.
-- `meta-service/src/main/resources/application.yml` — БД, Redis, JWT, размер матча
+- `meta-service/src/main/resources/application.yml` — БД (`UGAME_DB_HOST`, `UGAME_DB_USER`, …), Redis, JWT, размер матча
   (`UGAME_PLAYERS_PER_MATCH`, по умолчанию 2 для отладки; для 3×3 — 6).
 - **Секрет JWT в `application.yml` только для разработки.** В проде задайте `UGAME_JWT_SECRET`
   (`openssl rand -base64 32`).

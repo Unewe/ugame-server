@@ -1,10 +1,12 @@
 package com.ugame.meta.matchmaking;
 
+import com.ugame.meta.config.UgameProperties;
+import jakarta.annotation.PreDestroy;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.connection.stream.Consumer;
@@ -12,80 +14,97 @@ import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.connection.stream.StreamReadOptions;
-import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.data.redis.core.ReactiveStreamOperations;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Component;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * Читает результаты матчей из Redis Stream через consumer group: запись подтверждается (XACK)
  * только после успешной записи в БД, так что при падении мета-сервиса результат не теряется.
  */
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public class MatchResultConsumer {
-    private static final Logger log = LoggerFactory.getLogger(MatchResultConsumer.class);
     private static final String GROUP = "meta-service";
     private static final String CONSUMER = "meta-1"; // при нескольких экземплярах — уникальное имя
 
-    private final StringRedisTemplate redis;
+    private final ReactiveStringRedisTemplate redis;
     private final MatchResultService results;
-    private volatile boolean ready;
+    private final UgameProperties props;
 
-    public MatchResultConsumer(StringRedisTemplate redis, MatchResultService results) {
-        this.redis = redis;
-        this.results = results;
-    }
+    private Disposable loop;
 
     @EventListener(ApplicationReadyEvent.class)
-    public void createGroup() {
-        try {
-            redis.execute((RedisCallback<String>) connection -> connection.streamCommands().xGroupCreate(
-                    RedisKeys.MATCH_RESULTS_STREAM.getBytes(StandardCharsets.UTF_8), GROUP,
-                    ReadOffset.from("0"), true));
-        } catch (RuntimeException e) {
-            // BUSYGROUP — группа уже есть, это нормально
-            if (!String.valueOf(e.getMessage()).contains("BUSYGROUP")
-                    && (e.getCause() == null || !String.valueOf(e.getCause().getMessage()).contains("BUSYGROUP"))) {
-                log.warn("Не удалось создать consumer group: {}", e.toString());
-            }
-        }
-        ready = true;
+    public void start() {
+        loop = createGroup()
+                .thenMany(Flux.interval(props.matchmaking().pollInterval()))
+                .onBackpressureDrop()
+                // сначала свои неподтверждённые (остались после падения), затем новые
+                .concatMap(tick -> process(ReadOffset.from("0"))
+                        .then(process(ReadOffset.lastConsumed()))
+                        .onErrorResume(e -> {
+                            log.error("Ошибка чтения результатов матчей", e);
+                            return Mono.empty();
+                        }), 1)
+                .subscribe();
     }
 
-    @Scheduled(fixedDelay = 1000)
-    public void poll() {
-        if (!ready) {
-            return;
+    @PreDestroy
+    public void stop() {
+        if (loop != null) {
+            loop.dispose();
         }
-        // Сначала свои неподтверждённые (после падения), затем новые.
-        process(ReadOffset.from("0"));
-        process(ReadOffset.lastConsumed());
     }
 
-    private void process(ReadOffset offset) {
-        List<MapRecord<String, Object, Object>> records = redis.opsForStream().read(
-                Consumer.from(GROUP, CONSUMER),
-                StreamReadOptions.empty().count(50),
-                StreamOffset.create(RedisKeys.MATCH_RESULTS_STREAM, offset));
-        if (records == null) {
-            return;
+    /** XGROUP CREATE ... MKSTREAM; BUSYGROUP (группа уже есть) — нормально. */
+    private Mono<Void> createGroup() {
+        ByteBuffer key = ByteBuffer.wrap(RedisKeys.MATCH_RESULTS_STREAM.getBytes(StandardCharsets.UTF_8));
+        return redis.execute(connection -> connection.streamCommands()
+                        .xGroupCreate(key, GROUP, ReadOffset.from("0"), true))
+                .then()
+                .onErrorResume(e -> {
+                    if (!String.valueOf(e.getMessage()).contains("BUSYGROUP")
+                            && (e.getCause() == null || !String.valueOf(e.getCause().getMessage()).contains("BUSYGROUP"))) {
+                        log.warn("Не удалось создать consumer group: {}", e.toString());
+                    }
+                    return Mono.empty();
+                });
+    }
+
+    private Mono<Void> process(ReadOffset offset) {
+        return streams()
+                .read(Consumer.from(GROUP, CONSUMER),
+                        StreamReadOptions.empty().count(50),
+                        StreamOffset.create(RedisKeys.MATCH_RESULTS_STREAM, offset))
+                .concatMap(this::handle)
+                .then();
+    }
+
+    private Mono<Long> handle(MapRecord<String, String, String> record) {
+        Map<String, String> f = record.getValue();
+        String matchId = f.get("matchId");
+        String winner = f.get("winnerTeam");
+        Mono<Long> ack = streams().acknowledge(RedisKeys.MATCH_RESULTS_STREAM, GROUP, record.getId());
+
+        if (matchId == null || winner == null) {
+            // битая запись: подтверждаем, иначе она будет перечитываться вечно
+            log.error("Некорректная запись результата {}: {}", record.getId(), f);
+            return ack;
         }
-        for (MapRecord<String, Object, Object> record : records) {
-            Map<Object, Object> f = record.getValue();
-            String matchId = (String) f.get("matchId");
-            String winner = (String) f.get("winnerTeam");
-            if (matchId == null || winner == null) {
-                // битая запись: подтверждаем, иначе она будет перечитываться вечно
-                log.error("Некорректная запись результата {}: {}", record.getId(), f);
-                redis.opsForStream().acknowledge(RedisKeys.MATCH_RESULTS_STREAM, GROUP, record.getId());
-                continue;
-            }
-            try {
-                results.apply(matchId, Integer.parseInt(winner), (String) f.get("results"));
-                redis.opsForStream().acknowledge(RedisKeys.MATCH_RESULTS_STREAM, GROUP, record.getId());
-            } catch (RuntimeException e) {
-                log.error("Ошибка обработки результата {}: {}", record.getId(), e.toString());
-            }
-        }
+        return Mono.defer(() -> results.apply(matchId, Integer.parseInt(winner), f.get("results")))
+                .then(ack)
+                .onErrorResume(e -> {
+                    // не подтверждаем — запись перечитается на следующем тике
+                    log.error("Ошибка обработки результата {}: {}", record.getId(), e.toString());
+                    return Mono.empty();
+                });
+    }
+
+    private ReactiveStreamOperations<String, String, String> streams() {
+        return redis.opsForStream();
     }
 }

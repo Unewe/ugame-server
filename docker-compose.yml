@@ -4,14 +4,14 @@ services:
     image: postgres:17
     environment:
       POSTGRES_DB: ugame
-      POSTGRES_USER: ugame
-      POSTGRES_PASSWORD: ugame
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "5430:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ugame -d ugame"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       retries: 10
 
