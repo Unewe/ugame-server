@@ -50,7 +50,7 @@ public class MatchResultService {
 
         return updateDb.flatMap(applied -> {
             if (!applied) {
-                log.debug("Матч {} уже обработан", matchId);
+                log.debug("Match {} has already been processed", matchId);
                 return Mono.<Void>empty();
             }
             // матч закончился — игроки снова могут искать игру
@@ -58,7 +58,7 @@ public class MatchResultService {
                     .concatMap(line -> redis.delete(RedisKeys.status(line.playerId())))
                     .then()
                     .doOnSuccess(v ->
-                            log.info("Матч {}: результат применён, победила команда {}", matchId, winnerTeam));
+                            log.info("Match {}: result applied, team {} won", matchId, winnerTeam));
         });
     }
 

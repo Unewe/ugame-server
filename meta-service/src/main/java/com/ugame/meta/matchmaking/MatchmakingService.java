@@ -103,7 +103,7 @@ public class MatchmakingService {
                 .onBackpressureDrop() // предыдущий набор ещё идёт — пропускаем тик, а не копим
                 .concatMap(tick -> formMatches()
                         .onErrorResume(e -> {
-                            log.error("Ошибка набора матчей", e);
+                            log.error("Match selection error", e);
                             return Mono.empty();
                         }), 1)
                 .subscribe();
@@ -181,7 +181,7 @@ public class MatchmakingService {
                         .then(redis.delete(key))
                         .then(hash().putAll(key, status))
                         .then(redis.expire(key, ttl));
-            }).then().doOnSuccess(v -> log.info("Матч {} собран: игроки {} → {}:{}",
+            }).then().doOnSuccess(v -> log.info("Match {} set up: players {} -> {}:{}",
                     matchId, playerIds, server.host(), server.port()));
         });
     }

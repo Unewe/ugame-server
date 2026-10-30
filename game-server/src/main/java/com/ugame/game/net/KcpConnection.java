@@ -147,7 +147,7 @@ public final class KcpConnection {
             }
             int len = payload.readableBytes();
             if (len == 0) {
-                log.warn("{}: попытка отправить пустое сообщение", this);
+                log.warn("{}: attempt to send an empty message", this);
                 return;
             }
             if (channel == KcpChannel.RELIABLE) {

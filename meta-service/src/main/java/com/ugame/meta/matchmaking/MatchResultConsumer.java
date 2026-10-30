@@ -47,7 +47,7 @@ public class MatchResultConsumer {
                 .concatMap(tick -> process(ReadOffset.from("0"))
                         .then(process(ReadOffset.lastConsumed()))
                         .onErrorResume(e -> {
-                            log.error("Ошибка чтения результатов матчей", e);
+                            log.error("Error reading match results", e);
                             return Mono.empty();
                         }), 1)
                 .subscribe();
@@ -69,7 +69,7 @@ public class MatchResultConsumer {
                 .onErrorResume(e -> {
                     if (!String.valueOf(e.getMessage()).contains("BUSYGROUP")
                             && (e.getCause() == null || !String.valueOf(e.getCause().getMessage()).contains("BUSYGROUP"))) {
-                        log.warn("Не удалось создать consumer group: {}", e.toString());
+                        log.warn("Failed to create consumer group: {}", e.toString());
                     }
                     return Mono.empty();
                 });
@@ -92,14 +92,14 @@ public class MatchResultConsumer {
 
         if (matchId == null || winner == null) {
             // битая запись: подтверждаем, иначе она будет перечитываться вечно
-            log.error("Некорректная запись результата {}: {}", record.getId(), f);
+            log.error("Incorrect recording of result {}: {}", record.getId(), f);
             return ack;
         }
         return Mono.defer(() -> results.apply(matchId, Integer.parseInt(winner), f.get("results")))
                 .then(ack)
                 .onErrorResume(e -> {
                     // не подтверждаем — запись перечитается на следующем тике
-                    log.error("Ошибка обработки результата {}: {}", record.getId(), e.toString());
+                    log.error("Error processing result {}: {}", record.getId(), e.toString());
                     return Mono.empty();
                 });
     }

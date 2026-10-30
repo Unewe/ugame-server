@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8081
 
 ugame:
   db:
@@ -17,10 +17,10 @@ ugame:
     refresh-ttl: 30d
   matchmaking:
     # 6 для 3×3. Для отладки с одним-двумя клиентами поставьте 1 или 2.
-    players-per-match: ${UGAME_PLAYERS_PER_MATCH:2}
+    players-per-match: ${UGAME_PLAYERS_PER_MATCH:1}
     ticket-ttl: 60s
     poll-interval: 500ms
-    fallback-server-host: 192.168.0.140
+    fallback-server-host: 193.238.44.107
     fallback-server-port: 7777
 
 spring:
