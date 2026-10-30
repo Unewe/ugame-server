@@ -152,13 +152,13 @@ public final class KcpConnection {
             }
             if (channel == KcpChannel.RELIABLE) {
                 if (len > config.reliableMaxMessageSize()) {
-                    log.error("{}: надёжное сообщение {} байт больше лимита {}", this, len, config.reliableMaxMessageSize());
+                    log.error("{}: reliable message of {} bytes exceeds the limit of {}", this, len, config.reliableMaxMessageSize());
                     return;
                 }
                 sendReliable(HDR_DATA, payload);
             } else {
                 if (len > config.unreliableMaxMessageSize()) {
-                    log.error("{}: ненадёжное сообщение {} байт больше лимита {}", this, len, config.unreliableMaxMessageSize());
+                    log.error("{}: unreliable message of {} bytes exceeds the limit of {}", this, len, config.unreliableMaxMessageSize());
                     return;
                 }
                 sendUnreliable(HDR_UNRELIABLE_DATA, payload);

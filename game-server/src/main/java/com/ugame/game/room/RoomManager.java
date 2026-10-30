@@ -61,7 +61,7 @@ public final class RoomManager implements AutoCloseable {
         Room room = new Room(matchId, Math.max(1, expectedPlayers), settings, resultSink, this::onRoomClosed);
         long periodNanos = 1_000_000_000L / settings.tickRate();
         tasks.put(room, scheduler.scheduleAtFixedRate(room::tick, periodNanos, periodNanos, TimeUnit.NANOSECONDS));
-        log.info("Создана комната {} на {} игроков", matchId, expectedPlayers);
+        log.info("Room {} created for {} players", matchId, expectedPlayers);
         return room;
     }
 
@@ -71,7 +71,7 @@ public final class RoomManager implements AutoCloseable {
         if (task != null) {
             task.cancel(false);
         }
-        log.info("Комната {} закрыта", room.matchId());
+        log.info("Room {} is closed", room.matchId());
     }
 
     @Override

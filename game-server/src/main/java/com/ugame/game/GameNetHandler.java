@@ -36,7 +36,7 @@ final class GameNetHandler implements KcpListener {
     @Override
     public void onConnected(KcpConnection connection) {
         connection.attach(new ClientSession(connection));
-        log.debug("{}: рукопожатие пройдено", connection);
+        log.debug("{}: handshake completed", connection);
     }
 
     @Override
@@ -50,15 +50,15 @@ final class GameNetHandler implements KcpListener {
                 onUnreliable(session, type, payload);
             }
         } catch (InvalidProtocolBufferException | ByteReader.MalformedPacketException e) {
-            log.debug("{}: битое сообщение типа {}: {}", connection, type, e.getMessage());
-            connection.close("протокол: битое сообщение");
+            log.debug("{}: malformed message of type {}: {}", connection, type, e.getMessage());
+            connection.close("protocol: corrupted message");
         }
     }
 
     private void onReliable(ClientSession session, byte type, ByteBuf payload) throws InvalidProtocolBufferException {
         switch (type) {
             case MessageType.C2S_JOIN -> handleJoin(session, JoinRequest.parseFrom(payload.nioBuffer()));
-            default -> session.connection().close("протокол: неожиданный тип " + type);
+            default -> session.connection().close("protocol: unexpected type" + type);
         }
     }
 
@@ -80,13 +80,13 @@ final class GameNetHandler implements KcpListener {
         redis.redeemTicket(request.getTicket()).whenComplete((ticket, error) -> {
             if (error != null || ticket == null) {
                 if (error != null) {
-                    log.warn("{}: ошибка проверки билета: {}", session.connection(), error.toString());
+                    log.warn("{}: ticket validation error: {}", session.connection(), error.toString());
                 }
                 session.send(ProtoMessages.encode(MessageType.S2C_JOIN_RESULT, JoinResult.newBuilder()
                         .setOk(false)
                         .setError(error != null ? "server_error" : "invalid_ticket")
                         .build()), KcpChannel.RELIABLE);
-                session.connection().close("неверный билет", 1000);
+                session.connection().close("invalid ticket", 1000);
                 return;
             }
             if (session.connection().isClosed()) {
@@ -102,6 +102,6 @@ final class GameNetHandler implements KcpListener {
         if (session != null) {
             rooms.leave(session);
         }
-        log.debug("{}: отключён: {}", connection, reason);
+        log.debug("{}: disabled: {}", connection, reason);
     }
 }

@@ -29,7 +29,7 @@ public record GameServerConfig(
                 p.load(in);
             }
         } catch (IOException e) {
-            throw new IllegalStateException("Не удалось прочитать game-server.properties", e);
+            throw new IllegalStateException("Failed to read game-server.properties", e);
         }
 
         int port = intValue(p, "udp.port");
@@ -85,7 +85,7 @@ public record GameServerConfig(
     private static int intValue(Properties p, String key) {
         String v = value(p, key);
         if (v == null) {
-            throw new IllegalStateException("Не задан параметр " + key);
+            throw new IllegalStateException("Parameter not specified: " + key);
         }
         return Integer.parseInt(v.trim());
     }

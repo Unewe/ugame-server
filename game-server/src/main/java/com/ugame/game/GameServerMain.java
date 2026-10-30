@@ -41,12 +41,12 @@ public final class GameServerMain {
                         rooms.roomCount(), config.heartbeatSec() * 3L),
                 0, config.heartbeatSec(), TimeUnit.SECONDS);
 
-        log.info("Игровой сервер {} запущен: {}:{}, тик {} Гц",
+        log.info("Game server {} started: {}:{}, tick rate {} Hz",
                 config.serverId(), config.publicHost(), config.kcp().port(), config.rooms().tickRate());
 
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            log.info("Остановка...");
+            log.info("Stopping...");
             heartbeat.shutdownNow();
             redis.removeServer(config.serverId());
             server.close();

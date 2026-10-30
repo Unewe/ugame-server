@@ -25,7 +25,7 @@ public final class RedisGateway implements AutoCloseable {
         this.client = RedisClient.create(redisUri);
         this.connection = client.connect();
         this.async = connection.async();
-        log.info("Подключились к Redis {}", redisUri);
+        log.info("Connected to Redis {}", redisUri);
     }
 
     /**
@@ -44,7 +44,7 @@ public final class RedisGateway implements AutoCloseable {
     public void heartbeat(String serverId, String publicHost, int port, int rooms, long ttlSeconds) {
         async.setex(RedisKeys.gameServer(serverId), ttlSeconds, publicHost + ":" + port + ":" + rooms)
                 .exceptionally(e -> {
-                    log.warn("Не удалось отправить heartbeat: {}", e.toString());
+                    log.warn("Failed to send heartbeat: {}", e.toString());
                     return null;
                 });
     }
@@ -57,7 +57,7 @@ public final class RedisGateway implements AutoCloseable {
         fields.put("results", results); // playerId:team:kills:deaths,...
         async.xadd(RedisKeys.MATCH_RESULTS_STREAM, fields)
                 .exceptionally(e -> {
-                    log.error("Не удалось записать результат матча {}: {}", matchId, e.toString());
+                    log.error("Failed to record the result of match {}: {}", matchId, e.toString());
                     return null;
                 });
     }
@@ -66,7 +66,7 @@ public final class RedisGateway implements AutoCloseable {
         try {
             connection.sync().del(RedisKeys.gameServer(serverId));
         } catch (RuntimeException e) {
-            log.warn("Не удалось снять регистрацию сервера: {}", e.toString());
+            log.warn("Failed to unregister the server: {}", e.toString());
         }
     }
 

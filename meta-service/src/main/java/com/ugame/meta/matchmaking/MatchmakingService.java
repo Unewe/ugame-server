@@ -1,5 +1,6 @@
 package com.ugame.meta.matchmaking;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.ugame.meta.config.UgameProperties;
 import com.ugame.meta.player.Player;
 import com.ugame.meta.player.PlayerRepository;
@@ -41,6 +42,8 @@ public class MatchmakingService {
 
     public enum State { IDLE, QUEUED, MATCHED }
 
+    /** Пустые поля не попадают в JSON: клиенту (Unity JsonUtility) так проще. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Status(State state, String matchId, String host, Integer port, String ticket, Integer team) {
         static final Status IDLE = new Status(State.IDLE, null, null, null, null, null);
     }

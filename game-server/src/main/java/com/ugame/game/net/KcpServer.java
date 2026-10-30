@@ -68,7 +68,7 @@ public final class KcpServer implements AutoCloseable {
         tickTask = channel.eventLoop().scheduleAtFixedRate(
                 this::tick, config.intervalMs(), config.intervalMs(), TimeUnit.MILLISECONDS);
 
-        log.info("KCP-сервер слушает udp://{}:{} (транспорт: {})", config.host(), config.port(), epoll ? "epoll" : "nio");
+        log.info("KCP server is listening on udp://{}:{} (transport: {})", config.host(), config.port(), epoll ? "epoll" : "nio");
     }
 
     KcpConfig config() {
@@ -133,7 +133,7 @@ public final class KcpServer implements AutoCloseable {
                 connection.tick(now);
             }
         } catch (RuntimeException e) {
-            log.error("Ошибка в тике транспорта", e);
+            log.error("Error in transport tick", e);
         }
         removeClosed();
         channel.flush();
@@ -185,7 +185,7 @@ public final class KcpServer implements AutoCloseable {
                     tickTask.cancel(false);
                 }
                 for (KcpConnection c : new ArrayList<>(connections.values())) {
-                    c.disconnect("сервер остановлен", true);
+                    c.disconnect("server stopped", true);
                 }
                 removeClosed();
                 channel.flush();
@@ -195,7 +195,7 @@ public final class KcpServer implements AutoCloseable {
         }
         channel.close().awaitUninterruptibly();
         group.shutdownGracefully(0, 2, TimeUnit.SECONDS).awaitUninterruptibly();
-        log.info("KCP-сервер остановлен");
+        log.info("KCP server stopped");
     }
 
     private final class InboundHandler extends SimpleChannelInboundHandler<DatagramPacket> {
@@ -204,7 +204,7 @@ public final class KcpServer implements AutoCloseable {
             try {
                 onDatagram(packet.content(), packet.sender());
             } catch (RuntimeException e) {
-                log.warn("Ошибка обработки пакета от {}", packet.sender(), e);
+                log.warn("Error processing packet from {}", packet.sender(), e);
             }
         }
 
@@ -215,7 +215,7 @@ public final class KcpServer implements AutoCloseable {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.warn("Ошибка сокета", cause); // UDP-сокет не закрываем из-за единичных ошибок
+            log.warn("Socket error", cause); // UDP-сокет не закрываем из-за единичных ошибок
         }
     }
 }

@@ -20,7 +20,7 @@ ugame:
     players-per-match: ${UGAME_PLAYERS_PER_MATCH:2}
     ticket-ttl: 60s
     poll-interval: 500ms
-    fallback-server-host: 127.0.0.1
+    fallback-server-host: 192.168.0.140
     fallback-server-port: 7777
 
 spring:

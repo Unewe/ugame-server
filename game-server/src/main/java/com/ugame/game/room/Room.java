@@ -89,7 +89,7 @@ public final class Room {
             }
         } catch (RuntimeException e) {
             // Ошибка в логике не должна убивать поток планировщика и другие комнаты.
-            log.error("Комната {}: ошибка в тике", matchId, e);
+            log.error("Room {}: error in tick", matchId, e);
         }
     }
 
@@ -99,7 +99,7 @@ public final class Room {
         if (sessions.size() >= expectedPlayers || (timeout && !sessions.isEmpty())) {
             startMatch();
         } else if (timeout) {
-            log.info("Комната {}: никто не пришёл, закрываем", matchId);
+            log.info("Room {}: no one showed up, closing it", matchId);
             close();
         }
     }
@@ -117,7 +117,7 @@ public final class Room {
     private void tickEnded() {
         if (System.currentTimeMillis() - endedAt >= ENDED_LINGER_SEC * 1000L) {
             for (ClientSession s : sessions) {
-                s.connection().close("матч завершён");
+                s.connection().close("match finished");
             }
             close();
         }
@@ -137,7 +137,7 @@ public final class Room {
             if (existing.playerId == ticket.playerId()) {
                 brawler = existing.brawler;
                 sessions.remove(existing);
-                existing.connection().close("вход с другого устройства");
+                existing.connection().close("sign in from another device");
             }
         }
         if (brawler == null) {
@@ -165,7 +165,7 @@ public final class Room {
                 .setMatchId(matchId)
                 .build()), KcpChannel.RELIABLE);
 
-        log.info("Комната {}: вошёл {} (id={}, команда {}), игроков {}/{}",
+        log.info("Room {}: {} entered (id={}, team {}), players {}/{}",
                 matchId, ticket.username(), ticket.playerId(), brawler.team, sessions.size(), expectedPlayers);
 
         if (phase == Phase.RUNNING) {
@@ -182,7 +182,7 @@ public final class Room {
     void handleLeave(ClientSession session) {
         if (sessions.remove(session)) {
             // Боец остаётся на арене (как в Brawl Stars), игрок может переподключиться с новым билетом.
-            log.info("Комната {}: {} отключился", matchId, session.username);
+            log.info("Room {}: {} disconnected", matchId, session.username);
         }
     }
 
@@ -196,7 +196,7 @@ public final class Room {
         for (ClientSession s : sessions) {
             s.send(start, KcpChannel.RELIABLE); // массив только читается транспортом — можно разделять
         }
-        log.info("Комната {}: матч начался, игроков {}", matchId, sessions.size());
+        log.info("Room {}: match started, {} players", matchId, sessions.size());
     }
 
     private byte[] matchStartMessage() {
@@ -233,7 +233,7 @@ public final class Room {
             s.send(end, KcpChannel.RELIABLE);
         }
         resultSink.publish(matchId, winner, results.toString());
-        log.info("Комната {}: матч завершён, счёт {}:{}", matchId, s0, s1);
+        log.info("Room {}: match completed, score {}:{}", matchId, s0, s1);
     }
 
     private void close() {
