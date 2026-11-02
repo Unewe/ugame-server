@@ -258,7 +258,8 @@ public final class Room {
             packetWriter.reset();
             SnapshotPacket.writeHeader(packetWriter,
                     new SnapshotPacket.Header(world.tick(), ack, timeLeftSec,
-                            Math.min(255, world.score(0)), Math.min(255, world.score(1))),
+                            Math.min(255, world.score(0)), Math.min(255, world.score(1)),
+                            world.ownState(s.brawler)),
                     entities.size());
             packetWriter.bytes(entityWriter.array(), 0, entityWriter.size());
             s.send(packetWriter.toArray(), KcpChannel.UNRELIABLE);

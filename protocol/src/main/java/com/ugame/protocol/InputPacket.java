@@ -32,6 +32,7 @@ public final class InputPacket {
 
         public static final int ATTACK = 1;
         public static final int SUPER = 1 << 1;
+        public static final int DODGE = 1 << 2;
     }
 
     public record Command(int seq, int moveX, int moveY, int aim, int buttons) {

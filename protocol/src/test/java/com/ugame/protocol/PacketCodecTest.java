@@ -14,7 +14,7 @@ class PacketCodecTest {
     void inputRoundTrip() {
         var cmds = List.of(
                 new InputPacket.Command(65535, 127, -127, 40000, InputPacket.Buttons.ATTACK),
-                new InputPacket.Command(65534, 0, 5, 1, 0));
+                new InputPacket.Command(65534, 0, 5, 1, InputPacket.Buttons.SUPER | InputPacket.Buttons.DODGE));
         ByteWriter w = new ByteWriter();
         InputPacket.write(w, cmds);
         assertEquals(2 + 2 * InputPacket.COMMAND_SIZE, w.size());
@@ -27,10 +27,13 @@ class PacketCodecTest {
 
     @Test
     void snapshotRoundTrip() {
-        var header = new SnapshotPacket.Header(4_000_000_000L, 123, 90, 3, 7);
+        var header = new SnapshotPacket.Header(4_000_000_000L, 123, 90, 3, 7,
+                new SnapshotPacket.OwnState(255, 150, 6, 40000));
         var entities = List.of(
-                new SnapshotPacket.Entity(1, SnapshotPacket.EntityKind.BRAWLER, -1500, 2999, 65535, 255, 1),
-                new SnapshotPacket.Entity(2, SnapshotPacket.EntityKind.PROJECTILE, 32767, -32768, 0, 0, 0));
+                new SnapshotPacket.Entity(1, SnapshotPacket.EntityKind.BRAWLER, -1500, 2999, 65535, 255, 1,
+                        SnapshotPacket.Flags.DODGING | SnapshotPacket.Flags.SUPER_READY),
+                new SnapshotPacket.Entity(2, SnapshotPacket.EntityKind.PROJECTILE, 32767, -32768, 0, 0, 0,
+                        SnapshotPacket.Flags.SUPER_SHOT));
         ByteWriter w = new ByteWriter();
         SnapshotPacket.writeHeader(w, header, entities.size());
         SnapshotPacket.writeEntities(w, entities);
