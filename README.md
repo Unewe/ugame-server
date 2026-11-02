@@ -56,6 +56,8 @@ curl        localhost:8080/api/matchmaking/status -H "Authorization: Bearer $TOK
 | Метод | Путь | Доступ |
 |---|---|---|
 | POST | `/api/auth/register`, `/api/auth/login` | открыт |
+| POST | `/api/auth/guest` — гостевой аккаунт со сгенерированными именем (`Player_123456`) и паролем; пароль приходит в ответе один раз | открыт |
+| POST | `/api/auth/upgrade` — гость задаёт своё имя, email и пароль, кубки и статистика сохраняются | JWT гостя |
 | POST | `/api/auth/refresh` (ротация refresh-токена), `/api/auth/logout` | открыт |
 | GET | `/api/me` | JWT |
 | POST / DELETE | `/api/matchmaking/queue` | JWT |

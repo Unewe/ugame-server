@@ -17,6 +17,23 @@ public interface PlayerRepository extends ReactiveCrudRepository<Player, Long> {
     Mono<Boolean> existsByEmailIgnoreCase(String email);
 
     /**
+     * Гость становится обычным игроком: своё имя, email и пароль. Одним UPDATE, чтобы не затереть
+     * кубки, которые параллельно мог начислить результат матча.
+     *
+     * @return 1 — обновлено, 0 — игрок не найден или уже не гость
+     */
+    @Modifying
+    @Query("""
+            update players
+               set username = :username,
+                   email = :email,
+                   password_hash = :passwordHash,
+                   guest = false
+             where id = :id and guest
+            """)
+    Mono<Long> upgradeGuest(long id, String username, String email, String passwordHash);
+
+    /**
      * Итог матча одним атомарным UPDATE — без чтения строки и без гонок между матчами.
      *
      * @param win          1 — победа, 0 — нет

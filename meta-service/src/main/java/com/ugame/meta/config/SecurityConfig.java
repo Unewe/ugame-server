@@ -38,7 +38,7 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance()) // без сессий
                 .authorizeExchange(ex -> ex
-                        .pathMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
+                        .pathMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/guest", "/api/auth/login",
                                 "/api/auth/refresh", "/api/auth/logout").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/info").permitAll()
                         .anyExchange().authenticated())

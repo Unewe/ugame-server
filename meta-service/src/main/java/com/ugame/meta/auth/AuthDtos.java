@@ -23,5 +23,18 @@ public final class AuthDtos {
      * @param expiresIn срок жизни access-токена в секундах
      */
     public record TokenResponse(String accessToken, String refreshToken, long expiresIn, long playerId,
-                                String username) {}
+                                String username, boolean guest) {}
+
+    /**
+     * Ответ /api/auth/guest: токены и сгенерированный пароль. Клиент хранит имя и пароль у себя
+     * и входит ими через /api/auth/login — пароль показывается только здесь, один раз.
+     */
+    public record GuestResponse(String accessToken, String refreshToken, long expiresIn, long playerId,
+                                String username, boolean guest, String password) {
+
+        static GuestResponse of(TokenResponse t, String password) {
+            return new GuestResponse(t.accessToken(), t.refreshToken(), t.expiresIn(), t.playerId(), t.username(),
+                    t.guest(), password);
+        }
+    }
 }

@@ -20,11 +20,11 @@ public class PlayerController {
     private final PlayerRepository players;
 
     public record ProfileResponse(long id, String username, String email, int trophies, int matchesPlayed, int wins,
-                                  Instant createdAt) {
+                                  boolean guest, Instant createdAt) {
 
         static ProfileResponse of(Player p) {
             return new ProfileResponse(p.getId(), p.getUsername(), p.getEmail(), p.getTrophies(),
-                    p.getMatchesPlayed(), p.getWins(), p.getCreatedAt());
+                    p.getMatchesPlayed(), p.getWins(), p.isGuest(), p.getCreatedAt());
         }
     }
 

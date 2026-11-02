@@ -52,7 +52,7 @@ public class TokenService {
         return redis.opsForValue()
                 .set(REFRESH_PREFIX + sha256(refresh), player.getId().toString(), jwt.refreshTtl())
                 .thenReturn(new AuthDtos.TokenResponse(access, refresh, jwt.accessTtl().toSeconds(),
-                        player.getId(), player.getUsername()));
+                        player.getId(), player.getUsername(), player.isGuest()));
     }
 
     /** Погасить refresh-токен (GETDEL). Пустой Mono — токен недействителен. */

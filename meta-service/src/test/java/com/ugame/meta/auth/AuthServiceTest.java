@@ -1,6 +1,10 @@
 package com.ugame.meta.auth;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,7 +38,8 @@ class AuthServiceTest {
 
         when(tokens.issue(any())).thenAnswer(inv -> {
             Player p = inv.getArgument(0);
-            return Mono.just(new AuthDtos.TokenResponse("access", "refresh", 900, p.getId(), p.getUsername()));
+            return Mono.just(new AuthDtos.TokenResponse("access", "refresh", 900, p.getId(), p.getUsername(),
+                    p.isGuest()));
         });
     }
 
@@ -108,5 +113,60 @@ class AuthServiceTest {
         StepVerifier.create(auth.refresh(new AuthDtos.RefreshRequest("bad")))
                 .expectErrorMatches(e -> e instanceof ApiException api && api.getCode().equals("invalid_refresh_token"))
                 .verify();
+    }
+
+    @Test
+    void guestGetsGeneratedNameAndPassword() {
+        when(players.save(any())).thenAnswer(inv -> {
+            Player p = inv.getArgument(0);
+            p.setId(7L);
+            return Mono.just(p);
+        });
+
+        StepVerifier.create(auth.guest())
+                .expectNextMatches(g -> g.playerId() == 7L && g.guest()
+                        && g.username().matches("^Player_\\d{6}$")
+                        && g.password() != null && g.password().length() >= 20)
+                .verifyComplete();
+    }
+
+    @Test
+    void guestRetriesWhenGeneratedNameIsTaken() {
+        when(players.save(any()))
+                .thenReturn(Mono.error(new DuplicateKeyException("ux_players_username")))
+                .thenAnswer(inv -> {
+                    Player p = inv.getArgument(0);
+                    p.setId(8L);
+                    return Mono.just(p);
+                });
+
+        StepVerifier.create(auth.guest())
+                .expectNextMatches(g -> g.playerId() == 8L)
+                .verifyComplete();
+        verify(players, times(2)).save(any());
+    }
+
+    @Test
+    void upgradeTurnsGuestIntoPlayer() {
+        Player guest = Player.builder().id(5L).username("Player_123456").passwordHash("x").guest(true).build();
+        Player registered = Player.builder().id(5L).username("alice").passwordHash("secret123").build();
+        when(players.findById(5L)).thenReturn(Mono.just(guest), Mono.just(registered));
+        when(players.existsByUsernameIgnoreCase("alice")).thenReturn(Mono.just(false));
+        when(players.upgradeGuest(eq(5L), eq("alice"), any(), anyString())).thenReturn(Mono.just(1L));
+
+        StepVerifier.create(auth.upgrade(5L, new AuthDtos.RegisterRequest("alice", null, "secret123")))
+                .expectNextMatches(t -> t.playerId() == 5L && t.username().equals("alice") && !t.guest())
+                .verifyComplete();
+    }
+
+    @Test
+    void upgradeRejectsRegisteredPlayer() {
+        when(players.findById(5L)).thenReturn(Mono.just(
+                Player.builder().id(5L).username("alice").passwordHash("x").build()));
+
+        StepVerifier.create(auth.upgrade(5L, new AuthDtos.RegisterRequest("alice", null, "secret123")))
+                .expectErrorMatches(e -> e instanceof ApiException api && api.getCode().equals("already_registered"))
+                .verify();
+        verify(players, never()).upgradeGuest(anyLong(), anyString(), any(), anyString());
     }
 }

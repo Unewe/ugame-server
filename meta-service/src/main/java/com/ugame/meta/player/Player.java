@@ -31,5 +31,7 @@ public class Player {
     private int trophies;
     private int matchesPlayed;
     private int wins;
+    /** Гость: имя и пароль сгенерированы сервером, игрок ещё не регистрировался. */
+    private boolean guest;
     private Instant createdAt;
 }
