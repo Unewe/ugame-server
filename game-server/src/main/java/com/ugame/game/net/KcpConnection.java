@@ -177,7 +177,7 @@ public final class KcpConnection {
             }
             int ret = kcp.send(msg); // KCP берёт retained-срезы, наш буфер освобождаем сами
             if (ret < 0) {
-                log.error("{}: kcp.send вернул {}", this, ret);
+                log.error("{}: kcp.send returns {}", this, ret);
             }
         } finally {
             msg.release();
@@ -191,7 +191,7 @@ public final class KcpConnection {
             msg.writeByte(header).writeIntLE(value);
             int ret = kcp.send(msg);
             if (ret < 0) {
-                log.error("{}: kcp.send вернул {}", this, ret);
+                log.error("{}: kcp.send returns {}", this, ret);
             }
         } finally {
             msg.release();
@@ -242,7 +242,7 @@ public final class KcpConnection {
         if (channel == KcpChannel.RELIABLE.id) {
             int ret = kcp.input(body, true, now);
             if (ret < 0) {
-                log.debug("{}: kcp.input вернул {}", this, ret);
+                log.debug("{}: kcp.input returns {}", this, ret);
                 return;
             }
             receiveReliable(now);
@@ -264,9 +264,9 @@ public final class KcpConnection {
                 server.listener().onData(this, body, KcpChannel.UNRELIABLE);
             }
         } else if (header == HDR_DISCONNECT) {
-            disconnect("клиент отключился", false);
+            disconnect("the client disconnected", false);
         } else {
-            disconnect("неизвестный ненадёжный заголовок " + header, true);
+            disconnect("unknown, unreliable header " + header, true);
         }
     }
 
@@ -286,11 +286,11 @@ public final class KcpConnection {
 
     private void handleReliable(ByteBuf msg, long now) {
         if (msg.readableBytes() > 1 + config.reliableMaxMessageSize()) {
-            disconnect("слишком большое сообщение " + msg.readableBytes(), true);
+            disconnect("message too long " + msg.readableBytes(), true);
             return;
         }
         if (!msg.isReadable()) {
-            disconnect("пустое надёжное сообщение", true);
+            disconnect("an empty, reliable message", true);
             return;
         }
         byte header = msg.readByte();
@@ -304,7 +304,7 @@ public final class KcpConnection {
                     server.listener().onConnected(this);
                 }
                 case HDR_PING, HDR_PONG -> { /* до рукопожатия игнорируем */ }
-                default -> disconnect("данные до рукопожатия", true);
+                default -> disconnect("data prior to the handshake", true);
             }
             return;
         }
@@ -314,7 +314,7 @@ public final class KcpConnection {
                 if (msg.isReadable()) {
                     server.listener().onData(this, msg, KcpChannel.RELIABLE);
                 } else {
-                    disconnect("пустое Data-сообщение", true);
+                    disconnect("empty Data-message", true);
                 }
             }
             case HDR_PING -> {
@@ -334,8 +334,8 @@ public final class KcpConnection {
                     }
                 }
             }
-            case HDR_HELLO -> disconnect("повторный Hello", true);
-            default -> disconnect("неизвестный надёжный заголовок " + header, true);
+            case HDR_HELLO -> disconnect("Hello again", true);
+            default -> disconnect("unknown reliable header " + header, true);
         }
     }
 
@@ -346,11 +346,11 @@ public final class KcpConnection {
             return;
         }
         if (now - lastReceiveTime >= config.timeoutMs()) {
-            disconnect("таймаут: нет данных " + config.timeoutMs() + " мс", true);
+            disconnect("timeout: no data " + config.timeoutMs() + " мс", true);
             return;
         }
         if (kcp.waitSnd() >= QUEUE_DISCONNECT_THRESHOLD) {
-            disconnect("клиент не успевает принимать данные", true);
+            disconnect("the client is unable to keep up with receiving data", true);
             return;
         }
         if (state == State.AUTHENTICATED && now - lastPingTime >= PING_INTERVAL_MS) {
@@ -379,7 +379,7 @@ public final class KcpConnection {
         kcp.release();
         server.onClosed(this);
         if (wasAuthenticated) {
-            log.debug("{}: отключён ({})", this, reason);
+            log.debug("{}: disabled ({})", this, reason);
             server.listener().onDisconnected(this, reason);
         }
     }
