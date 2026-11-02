@@ -21,6 +21,8 @@ import java.util.List;
  * u16 dodgeCooldown   тиков до готовности уклонения у ЭТОГО клиента
  * u8  dashTicksLeft   сколько тиков рывка осталось у ЭТОГО клиента (для предсказания)
  * u16 dashAngle       направление текущего рывка, 0..65535
+ * u16 lastAttackSeq   seq команды последней атаки ЭТОГО клиента, которую сервер выпустил
+ * u16 lastSuperSeq    то же для супера (клиент убирает предсказанные выстрелы, которых не было)
  * u8  entityCount
  * entityCount × {
  *   u16 id
@@ -28,19 +30,19 @@ import java.util.List;
  *   i16 x             сантиметры
  *   i16 y
  *   u16 aim           угол, 0..65535
- *   u8  hp            0..255 (доля от максимума)
+ *   u8  hp            боец: 0..255 (доля от максимума); снаряд: id бойца-владельца
  *   u8  team
  *   u8  flags         битовая маска Flags
  * }
  * </pre>
  *
- * Размер: 18 + 12 × N байт. Лимит ненадёжного сообщения kcp2k при MTU 1200 — 1194 байта,
- * т. е. не больше 98 сущностей. Если мир больше — дельта-сжатие или область видимости.
+ * Размер: 22 + 12 × N байт. Лимит ненадёжного сообщения kcp2k при MTU 1200 — 1186 байта,
+ * т. е. не больше 97 сущностей. Если мир больше — дельта-сжатие или область видимости.
  */
 public final class SnapshotPacket {
     private SnapshotPacket() {}
 
-    public static final int HEADER_SIZE = 18;
+    public static final int HEADER_SIZE = 22;
     public static final int ENTITY_SIZE = 12;
 
     public static final class EntityKind {
@@ -60,8 +62,9 @@ public final class SnapshotPacket {
     }
 
     /** Состояние своего бойца — уходит только его владельцу. */
-    public record OwnState(int superCharge, int dodgeCooldownTicks, int dashTicksLeft, int dashAngle) {
-        public static final OwnState NONE = new OwnState(0, 0, 0, 0);
+    public record OwnState(int superCharge, int dodgeCooldownTicks, int dashTicksLeft, int dashAngle,
+                           int lastAttackSeq, int lastSuperSeq) {
+        public static final OwnState NONE = new OwnState(0, 0, 0, 0, 0, 0);
     }
 
     public record Header(long tick, int ackInputSeq, int timeLeftSec, int scoreTeam0, int scoreTeam1, OwnState own) {}
@@ -91,13 +94,15 @@ public final class SnapshotPacket {
                 .u16(h.own().dodgeCooldownTicks())
                 .u8(h.own().dashTicksLeft())
                 .u16(h.own().dashAngle())
+                .u16(h.own().lastAttackSeq())
+                .u16(h.own().lastSuperSeq())
                 .u8(entityCount);
     }
 
     /** Читает пакет без байта типа. Нужен для тестов и ботов; клиент делает то же самое на C#. */
     public static Snapshot readBody(ByteReader r) {
         Header h = new Header(r.u32(), r.u16(), r.u16(), r.u8(), r.u8(),
-                new OwnState(r.u8(), r.u16(), r.u8(), r.u16()));
+                new OwnState(r.u8(), r.u16(), r.u8(), r.u16(), r.u16(), r.u16()));
         int count = r.u8();
         List<Entity> list = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {

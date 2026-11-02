@@ -54,7 +54,9 @@ public record GameServerConfig(
                 intValue(p, "room.snapshot-every"),
                 intValue(p, "match.duration-sec"),
                 intValue(p, "match.join-timeout-sec"),
-                threads > 0 ? threads : Runtime.getRuntime().availableProcessors());
+                threads > 0 ? threads : Runtime.getRuntime().availableProcessors(),
+                intValue(p, "lagcomp.interp-delay-ticks", 3),
+                intValue(p, "lagcomp.max-rewind-ms", 300));
 
         String serverId = value(p, "server.id");
         if (serverId == null || serverId.isBlank()) {

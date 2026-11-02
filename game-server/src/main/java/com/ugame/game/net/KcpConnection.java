@@ -58,6 +58,7 @@ public final class KcpConnection {
     private long lastPingTime;
     private long lastPongTime;
     private volatile int rttMs;
+    private volatile int smoothedRttMs = -1;
     private volatile Object attachment;
 
     KcpConnection(KcpServer server, InetSocketAddress remote, int cookie, long now) {
@@ -88,6 +89,14 @@ public final class KcpConnection {
 
     public int rttMs() {
         return rttMs;
+    }
+
+    /**
+     * RTT, сглаженный по последним замерам (EWMA 1/4), мс; -1 — замеров ещё не было.
+     * Одиночный всплеск пинга не должен резко менять отмотку при проверке попаданий.
+     */
+    public int smoothedRttMs() {
+        return smoothedRttMs;
     }
 
     public boolean isAuthenticated() {
@@ -331,6 +340,8 @@ public final class KcpConnection {
                     int diff = localTime(now) - sent;
                     if (diff >= 0) {
                         rttMs = diff;
+                        int prev = smoothedRttMs;
+                        smoothedRttMs = prev < 0 ? diff : (3 * prev + diff + 2) / 4;
                     }
                 }
             }

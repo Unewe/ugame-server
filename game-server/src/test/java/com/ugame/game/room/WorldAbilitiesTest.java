@@ -17,9 +17,11 @@ class WorldAbilitiesTest {
         w.applyInput(b, new InputPacket.Command(++seq & 0xFFFF, 0, 0, Quantize.angleToU16(aim), buttons));
     }
 
-    private static void steps(World w, int n) {
+    /** Тики; клиент шлёт по команде за тик, поэтому seq растёт вместе с ними (кулдаун атаки — в командах). */
+    private void steps(World w, int n) {
         for (int i = 0; i < n; i++) {
             w.step();
+            seq++;
         }
     }
 

@@ -28,7 +28,7 @@ class PacketCodecTest {
     @Test
     void snapshotRoundTrip() {
         var header = new SnapshotPacket.Header(4_000_000_000L, 123, 90, 3, 7,
-                new SnapshotPacket.OwnState(255, 150, 6, 40000));
+                new SnapshotPacket.OwnState(255, 150, 6, 40000, 65535, 1234));
         var entities = List.of(
                 new SnapshotPacket.Entity(1, SnapshotPacket.EntityKind.BRAWLER, -1500, 2999, 65535, 255, 1,
                         SnapshotPacket.Flags.DODGING | SnapshotPacket.Flags.SUPER_READY),

@@ -61,7 +61,7 @@ public final class Room {
         this.settings = settings;
         this.resultSink = resultSink;
         this.onClosed = onClosed;
-        this.world = new World(settings.tickRate());
+        this.world = new World(settings.tickRate(), settings.interpDelayTicks(), settings.maxRewindMs());
     }
 
     public String matchId() {
@@ -105,6 +105,9 @@ public final class Room {
     }
 
     private void tickRunning() {
+        for (ClientSession s : sessions) {
+            world.setRtt(s.brawler, s.connection().smoothedRttMs()); // для отмотки при проверке попаданий
+        }
         world.step();
         if (world.tick() % settings.snapshotEvery() == 0) {
             broadcastSnapshot();
@@ -181,6 +184,7 @@ public final class Room {
 
     void handleLeave(ClientSession session) {
         if (sessions.remove(session)) {
+            world.setRtt(session.brawler, -1);
             // Боец остаётся на арене (как в Brawl Stars), игрок может переподключиться с новым билетом.
             log.info("Room {}: {} disconnected", matchId, session.username);
         }

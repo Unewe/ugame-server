@@ -4,6 +4,7 @@ import com.ugame.protocol.InputPacket;
 import com.ugame.protocol.Quantize;
 import com.ugame.protocol.SnapshotPacket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,8 +23,23 @@ import java.util.Map;
  *   пролетают насквозь. Направление — куда идёт игрок, если стоит — куда целится.
  *   Кулдаун DODGE_COOLDOWN_SEC с момента начала рывка.</li>
  * </ul>
- * Логику движения и рывка повторяет предсказание в MatchView.cs — меняете здесь, меняйте и там.
- * Единицы: метры и секунды; время внутри — в тиках.
+ *
+ * <p><b>Компенсация лагов.</b> Стрелок целится во врагов, которых видит в прошлом: снапшот идёт
+ * к нему RTT/2, клиент показывает чужих с задержкой интерполяции, и ещё RTT/2 летит его ввод.
+ * Свои выстрелы клиент рисует сразу (предсказание), поэтому на его экране «снаряд в полёте k тиков»
+ * встречается с врагами, отстающими на RTT + интерполяцию. Сервер повторяет ровно это: у каждого
+ * бойца хранится история позиций, а попадание снаряда проверяется по позиции цели, отмотанной на
+ * {@link #rewindTicks} стрелка. Отмотка фиксируется в момент выстрела и не больше maxRewind —
+ * при большом пинге стрелку придётся брать упреждение, зато цель не получает урон «из-за угла».
+ * Рывок честен для уклоняющегося: если цель в рывке сейчас или была в рывке в отмотанный момент,
+ * снаряд проходит насквозь. Цель, которая успела умереть и возродиться, по старым позициям не бьётся.
+ *
+ * <p>Кулдаун обычной атаки считается по номерам команд (seq), а не по тикам сервера: так клиент
+ * точно знает, какой выстрел сервер примет, и может показать его сразу. Защита от «ускоренного»
+ * клиента — минимальный интервал в тиках сервера с запасом на джиттер (ATTACK_JITTER_SLACK).
+ *
+ * <p>Логику движения, рывка и стрельбы повторяет предсказание в MatchView.cs — меняете здесь,
+ * меняйте и там. Единицы: метры и секунды; время внутри — в тиках.
  */
 final class World {
     static final float ARENA_WIDTH = 20f;
@@ -33,6 +49,8 @@ final class World {
     static final float BRAWLER_SPEED = 5f;      // м/с
     static final int BRAWLER_MAX_HP = 3000;
     static final float ATTACK_COOLDOWN_SEC = 0.5f;
+    /** Доля кулдауна, на которую тики сервера могут «сжаться» из-за джиттера сети. */
+    static final float ATTACK_JITTER_SLACK = 1f / 3f;
     static final float RESPAWN_SEC = 3f;
 
     static final float PROJECTILE_SPEED = 15f;  // м/с
@@ -54,27 +72,62 @@ final class World {
     static final float DASH_DURATION_SEC = 0.2f;
     static final float DASH_DISTANCE = 4f;
 
+    // --- компенсация лагов (значения по умолчанию; в бою — из RoomSettings) ---
+    /** Задержка показа чужих сущностей на клиенте, тиков (MatchView.InterpDelayTicks). */
+    static final int DEFAULT_INTERP_DELAY_TICKS = 3;
+    /** Дальше в прошлое не отматываем. 0 — компенсация выключена. */
+    static final int DEFAULT_MAX_REWIND_MS = 300;
+
+    // --- id сущностей ---
+    // Бойцы получают id 1..255: id владельца снаряда передаётся в снапшоте одним байтом.
+    static final int MAX_BRAWLER_ID = 255;
+    static final int FIRST_PROJECTILE_ID = 256;
+    static final int MAX_PROJECTILE_ID = 0xFFFF;  // дальше id снарядов идут по кругу
+
     /** Лимит сущностей в одном ненадёжном снапшоте (MTU 1200). */
-    static final int MAX_SNAPSHOT_ENTITIES = 95; // (1194 − 18) / 12 = 98
+    static final int MAX_SNAPSHOT_ENTITIES = 95; // (1194 − 22) / 12 = 97
 
     private final int tickRate;
     private final float dt;
     private final int dashTicks;
     private final int dodgeCooldownTicks;
     private final float dashStep;   // м за тик рывка
+    private final int attackCooldownTicks;
+    private final int attackMinTicks;      // минимум тиков сервера между выстрелами (анти-спидхак)
+    private final float interpDelayTicks;
+    private final float maxRewindTicks;
+    private final int historySize;
     private final Map<Integer, Brawler> brawlers = new LinkedHashMap<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final int[] teamScore = new int[2];
     private final List<SnapshotPacket.Entity> snapshotBuffer = new ArrayList<>();
-    private int nextEntityId = 1;
+    private int nextBrawlerId = 1;
+    private int nextProjectileId = FIRST_PROJECTILE_ID;
     private long tick;
 
+    // результат pastPosition — без выделения памяти на каждую проверку
+    private float pastX;
+    private float pastY;
+
     World(int tickRate) {
+        this(tickRate, DEFAULT_INTERP_DELAY_TICKS, DEFAULT_MAX_REWIND_MS);
+    }
+
+    /**
+     * @param interpDelayTicks на сколько тиков клиент показывает чужих в прошлом (MatchView.InterpDelayTicks)
+     * @param maxRewindMs      предел отмотки при проверке попаданий; 0 — без компенсации лагов
+     */
+    World(int tickRate, int interpDelayTicks, int maxRewindMs) {
         this.tickRate = tickRate;
         this.dt = 1f / tickRate;
         this.dashTicks = Math.max(1, Math.round(DASH_DURATION_SEC * tickRate));
         this.dodgeCooldownTicks = Math.round(DODGE_COOLDOWN_SEC * tickRate);
         this.dashStep = DASH_DISTANCE / dashTicks;
+        this.attackCooldownTicks = Math.max(1, Math.round(ATTACK_COOLDOWN_SEC * tickRate));
+        this.attackMinTicks = Math.max(1, Math.round(attackCooldownTicks * (1f - ATTACK_JITTER_SLACK)));
+        this.interpDelayTicks = Math.max(0, interpDelayTicks);
+        this.maxRewindTicks = Math.max(0f, maxRewindMs * tickRate / 1000f);
+        this.historySize = (int) Math.ceil(maxRewindTicks) + 2;
     }
 
     long tick() {
@@ -90,11 +143,71 @@ final class World {
     }
 
     Brawler spawnBrawler(long playerId, int team) {
-        Brawler b = new Brawler(nextEntityId++, playerId, team & 1);
+        if (nextBrawlerId > MAX_BRAWLER_ID) {
+            throw new IllegalStateException("too many brawlers in one match");
+        }
+        Brawler b = new Brawler(nextBrawlerId++, playerId, team & 1, historySize);
         respawn(b);
         brawlers.put(b.id, b);
         return b;
     }
+
+    // ------------------------------------------------------------------ компенсация лагов
+
+    /**
+     * Сглаженный RTT игрока, мс (KCP ping/pong раз в секунду). -1 — ещё не измерен или игрок
+     * отключился: тогда его выстрелы проверяются без отмотки.
+     */
+    void setRtt(Brawler b, int rttMs) {
+        b.rttMs = rttMs;
+    }
+
+    /**
+     * На сколько тиков назад смотреть, проверяя попадания этого стрелка: RTT (снапшот к нему
+     * + его ввод к нам) плюс задержка интерполяции на клиенте, но не больше maxRewind.
+     */
+    float rewindTicks(Brawler shooter) {
+        if (maxRewindTicks <= 0f || shooter.rttMs < 0) {
+            return 0f;
+        }
+        return Math.min(maxRewindTicks, shooter.rttMs * tickRate / 1000f + interpDelayTicks);
+    }
+
+    /**
+     * Позиция цели {@code rewind} тиков назад (с интерполяцией между тиками) → pastX/pastY.
+     * false — в тот момент по цели нельзя было попасть: была в рывке, мертва или это была её
+     * прошлая жизнь (с тех пор умерла и возродилась).
+     */
+    private boolean pastPosition(Brawler t, float rewind) {
+        pastX = t.x;
+        pastY = t.y;
+        if (rewind <= 0f) {
+            return true;
+        }
+        double at = tick - rewind;
+        long t0 = (long) Math.floor(at);
+        float f = (float) (at - t0);
+        int i0 = t.historyIndex(t0);
+        int i1 = t.historyIndex(t0 + 1);
+        if (i0 < 0 && i1 < 0) {
+            return true; // истории ещё нет (боец только что появился) — по текущей позиции
+        }
+        if (i0 < 0) { // боец появился между t0 и t0 + 1
+            i0 = i1;
+            f = 0f;
+        } else if (i1 < 0) {
+            i1 = i0;
+            f = 0f;
+        }
+        if (!t.hittableAt(i0) || !t.hittableAt(i1)) {
+            return false;
+        }
+        pastX = t.histX[i0] + (t.histX[i1] - t.histX[i0]) * f;
+        pastY = t.histY[i0] + (t.histY[i1] - t.histY[i0]) * f;
+        return true;
+    }
+
+    // ------------------------------------------------------------------ ввод
 
     /** Применяет новые команды ввода (уже отфильтрованные по seq), от старой к новой. */
     void applyInput(Brawler b, InputPacket.Command cmd) {
@@ -104,19 +217,35 @@ final class World {
         // Нажатие запоминается до тика вместе с прицелом ЭТОЙ команды: за один тик может прийти
         // несколько команд (джиттер, повтор после потери пакета), и следующая уже смотрит
         // по движению — без этого выстрел ушёл бы не туда, куда целились.
-        if (cmd.pressed(InputPacket.Buttons.ATTACK)) {
+        if (cmd.pressed(InputPacket.Buttons.ATTACK) && b.alive && attackReady(b, cmd.seq())) {
             b.attackRequested = true;
             b.attackAim = b.aim;
+            b.attackSeq = cmd.seq();
+            b.lastAttackCmdSeq = cmd.seq();
+            b.lastAttackTick = tick;
         }
         if (cmd.pressed(InputPacket.Buttons.SUPER)) {
             b.superRequested = true;
             b.superAim = b.aim;
+            b.superSeq = cmd.seq();
         }
         if (cmd.pressed(InputPacket.Buttons.DODGE)) {
             b.dodgeRequested = true;
         }
         b.lastInputSeq = cmd.seq();
     }
+
+    /**
+     * Кулдаун атаки — в командах клиента (одна команда = один тик клиента), так его повторяет
+     * предсказание в MatchView. Плюс нижняя граница в тиках сервера: команды могут прийти пачкой,
+     * но стрелять чаще, чем раз в attackMinTicks, нельзя.
+     */
+    private boolean attackReady(Brawler b, int seq) {
+        boolean bySeq = b.lastAttackCmdSeq < 0 || ((seq - b.lastAttackCmdSeq) & 0xFFFF) >= attackCooldownTicks;
+        return bySeq && tick - b.lastAttackTick >= attackMinTicks;
+    }
+
+    // ------------------------------------------------------------------ тик
 
     void step() {
         tick++;
@@ -135,15 +264,19 @@ final class World {
                 startDash(b);
             }
             moveBrawler(b);
-            if (b.attackRequested && tick - b.lastAttackTick >= ATTACK_COOLDOWN_SEC * tickRate) {
+            if (b.attackRequested) { // кулдаун уже проверен в applyInput
                 fire(b);
-                b.lastAttackTick = tick;
+                b.firedAttackSeq = b.attackSeq;
             }
             if (b.superRequested && b.superCharge >= SUPER_CHARGE_DAMAGE) {
                 fireSuper(b);
                 b.superCharge = 0;
+                b.firedSuperSeq = b.superSeq;
             }
             b.clearRequests();
+        }
+        for (Brawler b : brawlers.values()) {
+            b.record(tick); // состояние после движения — то же, что уйдёт в снапшот этого тика
         }
         stepProjectiles();
     }
@@ -203,13 +336,19 @@ final class World {
         float radius = isSuper ? SUPER_RADIUS : PROJECTILE_RADIUS;
         float dx = (float) Math.cos(angle);
         float dy = (float) Math.sin(angle);
-        Projectile p = new Projectile(nextEntityId++, b.id, b.team, isSuper);
+        Projectile p = new Projectile(nextProjectileId(), b.id, b.team, isSuper, rewindTicks(b));
         p.x = b.x + dx * (BRAWLER_RADIUS + radius);
         p.y = b.y + dy * (BRAWLER_RADIUS + radius);
         p.vx = dx * speed;
         p.vy = dy * speed;
         p.aim = angle;
         projectiles.add(p);
+    }
+
+    private int nextProjectileId() {
+        int id = nextProjectileId;
+        nextProjectileId = id >= MAX_PROJECTILE_ID ? FIRST_PROJECTILE_ID : id + 1;
+        return id;
     }
 
     private void stepProjectiles() {
@@ -230,10 +369,13 @@ final class World {
             }
             for (Brawler target : brawlers.values()) {
                 if (!target.alive || target.team == p.team || target.dashTicksLeft > 0) {
-                    continue; // в рывке снаряды пролетают насквозь
+                    continue; // мёртвых не бьём; в рывке снаряды пролетают насквозь
                 }
-                float dx = target.x - p.x;
-                float dy = target.y - p.y;
+                if (!pastPosition(target, p.rewindTicks)) {
+                    continue; // стрелок видел цель в рывке, мёртвой или в прошлой жизни
+                }
+                float dx = pastX - p.x;
+                float dy = pastY - p.y;
                 if (dx * dx + dy * dy <= hitDist * hitDist) {
                     int dealt = damage(target, p.ownerId, p.isSuper ? SUPER_DAMAGE : PROJECTILE_DAMAGE);
                     if (!p.isSuper) {
@@ -281,16 +423,22 @@ final class World {
         b.aim = (float) (b.team == 0 ? Math.PI / 2 : -Math.PI / 2);
         b.hp = BRAWLER_MAX_HP;
         b.alive = true;
+        b.life++;
         b.moveX = 0;
         b.moveY = 0;
         b.dashTicksLeft = 0;
     }
 
-    /** Состояние бойца для его владельца: заряд супера, кулдаун и рывок (для предсказания). */
+    /**
+     * Состояние бойца для его владельца: заряд супера, кулдаун и рывок (для предсказания), а также
+     * seq команд, чьи выстрелы сервер действительно сделал, — клиент убирает предсказанные
+     * снаряды, которых на сервере не было.
+     */
     SnapshotPacket.OwnState ownState(Brawler b) {
         int charge = Math.round(255f * b.superCharge / SUPER_CHARGE_DAMAGE);
         return new SnapshotPacket.OwnState(charge, Math.min(0xFFFF, b.dodgeCooldownTicks),
-                Math.min(255, b.dashTicksLeft), b.dashTicksLeft > 0 ? b.dashAngle : 0);
+                Math.min(255, b.dashTicksLeft), b.dashTicksLeft > 0 ? b.dashAngle : 0,
+                b.firedAttackSeq & 0xFFFF, b.firedSuperSeq & 0xFFFF);
     }
 
     /** Список сущностей для снапшота. Возвращает переиспользуемый список — не сохраняйте его. */
@@ -312,8 +460,9 @@ final class World {
             if (snapshotBuffer.size() >= MAX_SNAPSHOT_ENTITIES) {
                 break; // в реальной игре — область видимости или дельта-сжатие
             }
+            // у снаряда поле hp — id бойца-владельца: свои снаряды клиент рисует сам
             snapshotBuffer.add(new SnapshotPacket.Entity(p.id, SnapshotPacket.EntityKind.PROJECTILE,
-                    Quantize.posToI16(p.x), Quantize.posToI16(p.y), Quantize.angleToU16(p.aim), 0, p.team,
+                    Quantize.posToI16(p.x), Quantize.posToI16(p.y), Quantize.angleToU16(p.aim), p.ownerId, p.team,
                     p.isSuper ? SnapshotPacket.Flags.SUPER_SHOT : 0));
         }
         return snapshotBuffer;
@@ -334,10 +483,16 @@ final class World {
         float moveY;
         int hp;
         boolean alive;
+        int life;                 // номер жизни: растёт при каждом возрождении
         boolean attackRequested;
         boolean superRequested;
         float attackAim;          // прицел команды, в которой нажали атаку
         float superAim;           // прицел команды, в которой нажали супер
+        int attackSeq;            // seq команды принятой атаки
+        int superSeq;             // seq команды супера
+        int firedAttackSeq;       // seq последней атаки, которая реально вылетела (для клиента)
+        int firedSuperSeq;        // то же для супера
+        int lastAttackCmdSeq = -1;
         boolean dodgeRequested;
         int superCharge;          // накопленный урон, 0..SUPER_CHARGE_DAMAGE
         int dodgeCooldownTicks;   // 0 — уклонение готово
@@ -345,16 +500,50 @@ final class World {
         int dashAngle;            // u16
         float dashDx;
         float dashDy;
+        int rttMs = -1;           // -1 — не измерен (или игрок отключён)
         long lastAttackTick = Long.MIN_VALUE / 2;
         long respawnTick;
         int lastInputSeq = -1; // -1 = ввода ещё не было
         int kills;
         int deaths;
 
-        Brawler(int id, long playerId, int team) {
+        // история для компенсации лагов: кольцевой буфер по номеру тика
+        private final long[] histTick;
+        final float[] histX;
+        final float[] histY;
+        private final int[] histLife;     // 0 — мёртв
+        private final boolean[] histDashing;
+
+        Brawler(int id, long playerId, int team, int historySize) {
             this.id = id;
             this.playerId = playerId;
             this.team = team;
+            this.histTick = new long[historySize];
+            this.histX = new float[historySize];
+            this.histY = new float[historySize];
+            this.histLife = new int[historySize];
+            this.histDashing = new boolean[historySize];
+            Arrays.fill(histTick, -1);
+        }
+
+        void record(long tick) {
+            int i = (int) Math.floorMod(tick, (long) histTick.length);
+            histTick[i] = tick;
+            histX[i] = x;
+            histY[i] = y;
+            histLife[i] = alive ? life : 0;
+            histDashing[i] = alive && dashTicksLeft > 0;
+        }
+
+        /** Индекс записи за этот тик или -1, если её нет (слишком давно или боец появился позже). */
+        int historyIndex(long tick) {
+            int i = (int) Math.floorMod(tick, (long) histTick.length);
+            return histTick[i] == tick ? i : -1;
+        }
+
+        /** Можно ли было попасть в бойца в этот момент истории (жив, та же жизнь, не в рывке). */
+        boolean hittableAt(int i) {
+            return histLife[i] == life && !histDashing[i];
         }
 
         void clearRequests() {
@@ -369,6 +558,7 @@ final class World {
         final int ownerId;
         final int team;
         final boolean isSuper;
+        final float rewindTicks;  // отмотка стрелка на момент выстрела
         float x;
         float y;
         float vx;
@@ -376,11 +566,12 @@ final class World {
         float aim;
         float traveled;
 
-        Projectile(int id, int ownerId, int team, boolean isSuper) {
+        Projectile(int id, int ownerId, int team, boolean isSuper, float rewindTicks) {
             this.id = id;
             this.ownerId = ownerId;
             this.team = team;
             this.isSuper = isSuper;
+            this.rewindTicks = rewindTicks;
         }
     }
 }
