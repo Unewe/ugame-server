@@ -152,6 +152,8 @@ public final class Room {
         }
         if (brawler == null) {
             brawler = world.spawnBrawler(ticket.playerId(), ticket.team());
+        } else {
+            world.resetInput(brawler); // новое подключение нумерует команды заново
         }
 
         session.playerId = ticket.playerId();

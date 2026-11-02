@@ -11,18 +11,22 @@ import org.junit.jupiter.api.Test;
 class WorldAbilitiesTest {
     private static final int TICK_RATE = 30;
 
-    private int seq;
+    private WorldDriver d;
 
-    private void press(World w, World.Brawler b, float aim, int buttons) {
-        w.applyInput(b, new InputPacket.Command(++seq & 0xFFFF, 0, 0, Quantize.angleToU16(aim), buttons));
+    private WorldDriver driver(World w) {
+        if (d == null || d.w != w) {
+            d = new WorldDriver(w);
+        }
+        return d;
     }
 
-    /** Тики; клиент шлёт по команде за тик, поэтому seq растёт вместе с ними (кулдаун атаки — в командах). */
+    private void press(World w, World.Brawler b, float aim, int buttons) {
+        driver(w).input(b, 0, 0, aim, buttons);
+    }
+
+    /** Тики; каждый боец шлёт команду на каждый тик, как настоящий клиент. */
     private void steps(World w, int n) {
-        for (int i = 0; i < n; i++) {
-            w.step();
-            seq++;
-        }
+        driver(w).steps(n);
     }
 
     @Test
@@ -32,20 +36,20 @@ class WorldAbilitiesTest {
         float startY = b.y;
 
         press(w, b, (float) (Math.PI / 2), InputPacket.Buttons.DODGE); // стоим — рывок по прицелу (вверх)
-        w.step();
+        steps(w, 1);
         assertTrue(b.dashTicksLeft > 0);
         steps(w, 10);
         assertEquals(startY + World.DASH_DISTANCE, b.y, 0.01);
 
         // кулдаун: повторное нажатие сразу не срабатывает
         press(w, b, (float) (Math.PI / 2), InputPacket.Buttons.DODGE);
-        w.step();
+        steps(w, 1);
         assertEquals(0, b.dashTicksLeft);
         assertTrue(w.ownState(b).dodgeCooldownTicks() > 0);
 
         steps(w, Math.round(World.DODGE_COOLDOWN_SEC * TICK_RATE));
         press(w, b, (float) (Math.PI / 2), InputPacket.Buttons.DODGE);
-        w.step();
+        steps(w, 1);
         assertTrue(b.dashTicksLeft > 0, "после 5 секунд уклонение снова доступно");
     }
 
@@ -58,7 +62,7 @@ class WorldAbilitiesTest {
         target.y = shooter.y + 3f;
 
         press(w, shooter, (float) (Math.PI / 2), InputPacket.Buttons.ATTACK);
-        w.step(); // выстрел
+        steps(w, 1); // выстрел
         target.dashTicksLeft = 1000; // держим в рывке, пока снаряд пролетает
         target.dashDx = 0;
         target.dashDy = 0;
@@ -88,7 +92,7 @@ class WorldAbilitiesTest {
         target.y = shooter.y + 4f; // на 4 м попадают 3 центральных снаряда веера
         target.hp = World.BRAWLER_MAX_HP;
         press(w, shooter, up, InputPacket.Buttons.SUPER);
-        w.step();
+        steps(w, 1);
         assertEquals(0, shooter.superCharge);
         long superShots = w.snapshotEntities().stream()
                 .filter(e -> (e.flags() & SnapshotPacket.Flags.SUPER_SHOT) != 0).count();
@@ -106,8 +110,8 @@ class WorldAbilitiesTest {
         float up = (float) (Math.PI / 2);
         // две команды в одном тике: выстрел вверх, затем «идём вправо» с прицелом вправо
         press(w, b, up, InputPacket.Buttons.ATTACK);
-        w.applyInput(b, new InputPacket.Command(++seq & 0xFFFF, 127, 0, Quantize.angleToU16(0f), 0));
-        w.step();
+        driver(w).input(b, 127, 0, 0f, 0);
+        steps(w, 1);
         var shot = w.snapshotEntities().stream()
                 .filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).findFirst().orElseThrow();
         assertEquals(Quantize.angleToU16(up), shot.aim());

@@ -3,6 +3,7 @@ package com.ugame.game.room;
 import com.ugame.protocol.InputPacket;
 import com.ugame.protocol.Quantize;
 import com.ugame.protocol.SnapshotPacket;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -33,6 +34,12 @@ import java.util.Map;
  * при большом пинге стрелку придётся брать упреждение, зато цель не получает урон «из-за угла».
  * Рывок честен для уклоняющегося: если цель в рывке сейчас или была в рывке в отмотанный момент,
  * снаряд проходит насквозь. Цель, которая успела умереть и возродиться, по старым позициям не бьётся.
+ *
+ * <p><b>Ввод.</b> Команды клиента (одна на его тик) встают в очередь бойца и выполняются по одной
+ * за тик сервера — тем же шагом, что предсказание в MatchView. Сервер не «додумывает» движение по
+ * последнему вводу и не склеивает несколько команд в один шаг, поэтому позиция после команды N
+ * у сервера и у клиента совпадает, и своему бойцу не нужны поправки. Джиттер сети гасит маленький
+ * запас в очереди (см. {@link #runQueuedInput}).
  *
  * <p>Кулдаун обычной атаки считается по номерам команд (seq), а не по тикам сервера: так клиент
  * точно знает, какой выстрел сервер примет, и может показать его сразу. Защита от «ускоренного»
@@ -83,6 +90,14 @@ final class World {
     static final int MAX_BRAWLER_ID = 255;
     static final int FIRST_PROJECTILE_ID = 256;
     static final int MAX_PROJECTILE_ID = 0xFFFF;  // дальше id снарядов идут по кругу
+
+    // --- очередь ввода ---
+    /** Сколько команд держим «в запасе» от джиттера; больше — догоняем по две за тик. */
+    static final int INPUT_QUEUE_TARGET = 2;
+    /** Запас кредита: столько команд сверх «одна за тик» можно выполнить, догоняя задержку. */
+    static final int INPUT_CREDIT_MAX = 4;
+    /** Больше команд в очереди не держим (≈ 270 мс при 30 Гц). */
+    static final int MAX_INPUT_QUEUE = 8;
 
     /** Лимит сущностей в одном ненадёжном снапшоте (MTU 1200). */
     static final int MAX_SNAPSHOT_ENTITIES = 95; // (1194 − 22) / 12 = 97
@@ -209,30 +224,84 @@ final class World {
 
     // ------------------------------------------------------------------ ввод
 
-    /** Применяет новые команды ввода (уже отфильтрованные по seq), от старой к новой. */
-    void applyInput(Brawler b, InputPacket.Command cmd) {
+    /**
+     * Ставит команду в очередь бойца (поток комнаты). Дубли и устаревшие (пакет содержит несколько
+     * последних команд, UDP может переставить пакеты) отбрасываются.
+     */
+    void queueInput(Brawler b, InputPacket.Command cmd) {
+        if (b.lastQueuedSeq >= 0 && !Quantize.seqGreater(cmd.seq(), b.lastQueuedSeq)) {
+            return;
+        }
+        b.lastQueuedSeq = cmd.seq();
+        if (b.inputQueue.size() >= MAX_INPUT_QUEUE) {
+            b.inputQueue.pollFirst(); // честный клиент сюда не доходит: столько не накопить без спидхака
+        }
+        b.inputQueue.addLast(new QueuedCommand(cmd, tick));
+    }
+
+    /**
+     * Игрок вошёл заново (новое подключение — нумерация команд с начала). Боец остаётся тем же,
+     * но всё, что привязано к seq старого подключения, сбрасываем.
+     */
+    void resetInput(Brawler b) {
+        b.inputQueue.clear();
+        b.lastQueuedSeq = -1;
+        b.lastInputSeq = -1;
+        b.lastAttackCmdSeq = -1;
+        b.firedAttackSeq = 0;
+        b.firedSuperSeq = 0;
+    }
+
+    /**
+     * Сколько команд выполнить в этом тике. Обычно одну. Если очередь выросла (после джиттера пришла
+     * пачка) — две, пока не вернёмся к INPUT_QUEUE_TARGET: одна команда «в запасе» сглаживает
+     * следующий провал, вторая — догоняем задержку. Кредит (+1 за тик, не больше INPUT_CREDIT_MAX)
+     * не даёт клиенту, шлющему команды чаще tickRate, бегать быстрее остальных.
+     */
+    private void runQueuedInput(Brawler b) {
+        b.inputCredit = Math.min(INPUT_CREDIT_MAX, b.inputCredit + 1);
+        int budget = b.inputQueue.size() > INPUT_QUEUE_TARGET ? 2 : 1;
+        for (int n = 0; n < budget && b.inputCredit > 0 && !b.inputQueue.isEmpty(); n++) {
+            b.inputCredit--;
+            runCommand(b, b.inputQueue.pollFirst());
+        }
+    }
+
+    /**
+     * Один шаг бойца по одной команде — ровно то, что делает MatchView.Step на клиенте
+     * (кулдаун рывка, начало рывка, движение), плюс выстрелы. Поэтому состояние сервера после
+     * команды N совпадает с предсказанием клиента после той же команды бит в бит, и при сверке
+     * по ackInputSeq поправок нет, пока не вмешается кто-то другой (урон, смерть).
+     */
+    private void runCommand(Brawler b, QueuedCommand q) {
+        InputPacket.Command cmd = q.cmd();
         b.moveX = Quantize.i8ToAxis(cmd.moveX());
         b.moveY = Quantize.i8ToAxis(cmd.moveY());
         b.aim = Quantize.u16ToAngle(cmd.aim());
-        // Нажатие запоминается до тика вместе с прицелом ЭТОЙ команды: за один тик может прийти
-        // несколько команд (джиттер, повтор после потери пакета), и следующая уже смотрит
-        // по движению — без этого выстрел ушёл бы не туда, куда целились.
-        if (cmd.pressed(InputPacket.Buttons.ATTACK) && b.alive && attackReady(b, cmd.seq())) {
-            b.attackRequested = true;
-            b.attackAim = b.aim;
-            b.attackSeq = cmd.seq();
+        b.lastInputSeq = cmd.seq();
+
+        if (b.dodgeCooldownTicks > 0) {
+            b.dodgeCooldownTicks--;
+        }
+        if (cmd.pressed(InputPacket.Buttons.DODGE) && b.dodgeCooldownTicks == 0 && b.dashTicksLeft == 0) {
+            startDash(b);
+        }
+        moveBrawler(b);
+
+        // Сколько команда ждала в очереди сверх обычного тика — на столько дальше в прошлом
+        // её видел стрелок; добавляем к отмотке.
+        float queued = Math.max(0, tick - q.receivedTick() - 1);
+        if (cmd.pressed(InputPacket.Buttons.ATTACK) && attackReady(b, cmd.seq())) {
             b.lastAttackCmdSeq = cmd.seq();
             b.lastAttackTick = tick;
+            spawnProjectile(b, b.aim, false, queued);
+            b.firedAttackSeq = cmd.seq();
         }
-        if (cmd.pressed(InputPacket.Buttons.SUPER)) {
-            b.superRequested = true;
-            b.superAim = b.aim;
-            b.superSeq = cmd.seq();
+        if (cmd.pressed(InputPacket.Buttons.SUPER) && b.superCharge >= SUPER_CHARGE_DAMAGE) {
+            fireSuper(b, queued);
+            b.superCharge = 0;
+            b.firedSuperSeq = cmd.seq();
         }
-        if (cmd.pressed(InputPacket.Buttons.DODGE)) {
-            b.dodgeRequested = true;
-        }
-        b.lastInputSeq = cmd.seq();
     }
 
     /**
@@ -250,30 +319,23 @@ final class World {
     void step() {
         tick++;
         for (Brawler b : brawlers.values()) {
-            if (b.dodgeCooldownTicks > 0) {
-                b.dodgeCooldownTicks--; // кулдаун идёт и пока боец мёртв
-            }
             if (!b.alive) {
+                if (b.dodgeCooldownTicks > 0) {
+                    b.dodgeCooldownTicks--; // пока боец мёртв, кулдаун идёт по тикам
+                }
+                // команды, отправленные до того, как клиент узнал о смерти, только подтверждаем
+                QueuedCommand q;
+                while ((q = b.inputQueue.pollFirst()) != null) {
+                    b.lastInputSeq = q.cmd().seq();
+                }
                 if (tick >= b.respawnTick) {
                     respawn(b);
                 }
-                b.clearRequests();
                 continue;
             }
-            if (b.dodgeRequested && b.dodgeCooldownTicks == 0 && b.dashTicksLeft == 0) {
-                startDash(b);
-            }
-            moveBrawler(b);
-            if (b.attackRequested) { // кулдаун уже проверен в applyInput
-                fire(b);
-                b.firedAttackSeq = b.attackSeq;
-            }
-            if (b.superRequested && b.superCharge >= SUPER_CHARGE_DAMAGE) {
-                fireSuper(b);
-                b.superCharge = 0;
-                b.firedSuperSeq = b.superSeq;
-            }
-            b.clearRequests();
+            // Живой боец двигается только по командам. Нет команд (лаг, игрок отключился) —
+            // стоит на месте, а не идёт дальше по последнему вводу, которого клиент не предсказывал.
+            runQueuedInput(b);
         }
         for (Brawler b : brawlers.values()) {
             b.record(tick); // состояние после движения — то же, что уйдёт в снапшот этого тика
@@ -319,24 +381,21 @@ final class World {
         b.y = clamp(b.y + stepY, BRAWLER_RADIUS, ARENA_HEIGHT - BRAWLER_RADIUS);
     }
 
-    private void fire(Brawler b) {
-        spawnProjectile(b, b.attackAim, false);
-    }
-
     /** Веер из SUPER_SHOTS снарядов, симметрично относительно прицела. */
-    private void fireSuper(Brawler b) {
+    private void fireSuper(Brawler b, float extraRewind) {
         for (int i = 0; i < SUPER_SHOTS; i++) {
             float t = SUPER_SHOTS == 1 ? 0f : (float) i / (SUPER_SHOTS - 1) - 0.5f; // -0.5..0.5
-            spawnProjectile(b, b.superAim + t * SUPER_SPREAD_RAD, true);
+            spawnProjectile(b, b.aim + t * SUPER_SPREAD_RAD, true, extraRewind);
         }
     }
 
-    private void spawnProjectile(Brawler b, float angle, boolean isSuper) {
+    private void spawnProjectile(Brawler b, float angle, boolean isSuper, float extraRewind) {
         float speed = isSuper ? SUPER_SPEED : PROJECTILE_SPEED;
         float radius = isSuper ? SUPER_RADIUS : PROJECTILE_RADIUS;
         float dx = (float) Math.cos(angle);
         float dy = (float) Math.sin(angle);
-        Projectile p = new Projectile(nextProjectileId(), b.id, b.team, isSuper, rewindTicks(b));
+        float rewind = rewindTicks(b) > 0f ? Math.min(maxRewindTicks, rewindTicks(b) + extraRewind) : 0f;
+        Projectile p = new Projectile(nextProjectileId(), b.id, b.team, isSuper, rewind);
         p.x = b.x + dx * (BRAWLER_RADIUS + radius);
         p.y = b.y + dy * (BRAWLER_RADIUS + radius);
         p.vx = dx * speed;
@@ -484,16 +543,12 @@ final class World {
         int hp;
         boolean alive;
         int life;                 // номер жизни: растёт при каждом возрождении
-        boolean attackRequested;
-        boolean superRequested;
-        float attackAim;          // прицел команды, в которой нажали атаку
-        float superAim;           // прицел команды, в которой нажали супер
-        int attackSeq;            // seq команды принятой атаки
-        int superSeq;             // seq команды супера
+        final ArrayDeque<QueuedCommand> inputQueue = new ArrayDeque<>();
+        int lastQueuedSeq = -1;   // последняя принятая в очередь команда
+        int inputCredit = INPUT_CREDIT_MAX;
         int firedAttackSeq;       // seq последней атаки, которая реально вылетела (для клиента)
         int firedSuperSeq;        // то же для супера
         int lastAttackCmdSeq = -1;
-        boolean dodgeRequested;
         int superCharge;          // накопленный урон, 0..SUPER_CHARGE_DAMAGE
         int dodgeCooldownTicks;   // 0 — уклонение готово
         int dashTicksLeft;        // > 0 — боец в рывке и неуязвим
@@ -503,7 +558,7 @@ final class World {
         int rttMs = -1;           // -1 — не измерен (или игрок отключён)
         long lastAttackTick = Long.MIN_VALUE / 2;
         long respawnTick;
-        int lastInputSeq = -1; // -1 = ввода ещё не было
+        int lastInputSeq = -1; // последняя ВЫПОЛНЕННАЯ команда (ack для клиента); -1 — ещё не было
         int kills;
         int deaths;
 
@@ -546,12 +601,10 @@ final class World {
             return histLife[i] == life && !histDashing[i];
         }
 
-        void clearRequests() {
-            attackRequested = false;
-            superRequested = false;
-            dodgeRequested = false;
-        }
     }
+
+    /** Команда в очереди и тик, когда она пришла (для учёта ожидания в отмотке). */
+    record QueuedCommand(InputPacket.Command cmd, long receivedTick) {}
 
     static final class Projectile {
         final int id;

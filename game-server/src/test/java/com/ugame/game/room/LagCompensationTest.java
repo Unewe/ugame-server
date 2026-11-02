@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.ugame.protocol.InputPacket;
-import com.ugame.protocol.Quantize;
 import com.ugame.protocol.SnapshotPacket;
 import org.junit.jupiter.api.Test;
 
@@ -19,13 +18,13 @@ class LagCompensationTest {
     private static final float UP = (float) (Math.PI / 2);
 
     private World w;
+    private WorldDriver d;
     private World.Brawler shooter;
     private World.Brawler target;
-    private int shooterSeq;
-    private int targetSeq;
 
     private void setUp() {
         w = new World(TICK_RATE, 3, 300);
+        d = new WorldDriver(w);
         shooter = w.spawnBrawler(1, 0);
         target = w.spawnBrawler(2, 1);
         shooter.x = 10f;
@@ -36,19 +35,15 @@ class LagCompensationTest {
     }
 
     private void shooterInput(float aim, int buttons) {
-        w.applyInput(shooter, new InputPacket.Command(++shooterSeq & 0xFFFF, 0, 0, Quantize.angleToU16(aim), buttons));
+        d.input(shooter, 0, 0, aim, buttons);
     }
 
     private void targetMoves(int moveX) {
-        w.applyInput(target, new InputPacket.Command(++targetSeq & 0xFFFF, moveX, 0, Quantize.angleToU16(-UP), 0));
+        d.input(target, moveX, 0, -UP, 0);
     }
 
-    /** Тики; клиент шлёт по команде за тик, поэтому seq стрелка растёт вместе с ними. */
     private void steps(int n) {
-        for (int i = 0; i < n; i++) {
-            w.step();
-            shooterSeq++;
-        }
+        d.steps(n);
     }
 
     private void shootWhileTargetLeaves() {
@@ -113,7 +108,7 @@ class LagCompensationTest {
         w.setRtt(shooter, 200);
 
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         target.dashTicksLeft = 0; // сейчас цель уже не в рывке, но стрелок видел её в рывке
         steps(20);
         assertEquals(World.BRAWLER_MAX_HP, target.hp);
@@ -157,19 +152,21 @@ class LagCompensationTest {
     void attackCooldownCountsClientCommands() {
         setUp();
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         int fired = w.ownState(shooter).lastAttackSeq();
-        assertEquals(shooterSeq & 0xFFFF, fired);
-        steps(30); // тиков сервера прошло много — решают номера команд
+        assertEquals(d.seq(shooter), fired);
+        for (int i = 0; i < 30; i++) {
+            w.step(); // тиков сервера прошло много, а команд стрелок не слал — решают номера команд
+        }
 
-        shooterSeq = fired + 13; // следующая команда — через 14 после выстрела: рано
+        d.setSeq(shooter, fired + 13); // следующая команда — через 14 после выстрела: рано
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         assertEquals(fired, w.ownState(shooter).lastAttackSeq(), "сервер не выпустил ранний выстрел");
 
-        shooterSeq = fired + 14; // через 15 команд — тот выстрел, который клиент уже показал
+        d.setSeq(shooter, fired + 14); // через 15 команд — тот выстрел, который клиент уже показал
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         assertEquals((fired + 15) & 0xFFFF, w.ownState(shooter).lastAttackSeq());
     }
 
@@ -177,11 +174,11 @@ class LagCompensationTest {
     void burstOfCommandsCannotFireFasterThanServerAllows() {
         setUp();
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         int fired = w.ownState(shooter).lastAttackSeq();
-        shooterSeq += 14; // «ускоренный» клиент: 15 команд за один тик сервера
+        d.setSeq(shooter, fired + 14); // «ускоренный» клиент: 15 команд за один тик сервера
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         assertEquals(fired, w.ownState(shooter).lastAttackSeq(), "второй выстрел через тик не проходит");
         assertEquals(1, projectiles());
     }
@@ -190,7 +187,7 @@ class LagCompensationTest {
     void projectileCarriesOwnerIdInSnapshot() {
         setUp();
         shooterInput(UP, InputPacket.Buttons.ATTACK);
-        w.step();
+        steps(1);
         var shot = w.snapshotEntities().stream()
                 .filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).findFirst().orElseThrow();
         assertEquals(shooter.id, shot.hp());

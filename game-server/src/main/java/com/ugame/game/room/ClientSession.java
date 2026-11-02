@@ -3,7 +3,6 @@ package com.ugame.game.room;
 import com.ugame.game.net.KcpChannel;
 import com.ugame.game.net.KcpConnection;
 import com.ugame.protocol.InputPacket;
-import com.ugame.protocol.Quantize;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -43,16 +42,16 @@ public final class ClientSession {
         connection.send(message, channel);
     }
 
-    /** Применить новые команды (пакет содержит их от новой к старой). Поток комнаты. */
+    /**
+     * Поставить новые команды в очередь бойца (пакет содержит их от новой к старой; дубли World
+     * отбросит сам). Выполняются они по одной за тик в {@link World#step()}. Поток комнаты.
+     */
     void applyInputs(World world, List<InputPacket.Command> newestFirst) {
         if (brawler == null) {
             return;
         }
         for (int i = newestFirst.size() - 1; i >= 0; i--) {
-            InputPacket.Command cmd = newestFirst.get(i);
-            if (brawler.lastInputSeq < 0 || Quantize.seqGreater(cmd.seq(), brawler.lastInputSeq)) {
-                world.applyInput(brawler, cmd);
-            }
+            world.queueInput(brawler, newestFirst.get(i));
         }
     }
 }
