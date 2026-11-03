@@ -30,6 +30,10 @@ import java.util.Map;
  * (см. {@link LagCompensation}). Рывок честен для уклоняющегося: цель в рывке сейчас или
  * в отмотанный момент не получает урона.
  *
+ * <p><b>Снаряды в снапшоте</b> — не позициями, а событиями «выстрел» и «попадание»: полёт по прямой
+ * клиент считает сам. События хранятся SHOT_EVENT_KEEP_TICKS, и каждый клиент получает их,
+ * пока не подтвердит (см. {@link #shotEventsAfter}).
+ *
  * <p>Движение, рывок и стрельбу повторяет предсказание в MatchView.cs — меняете здесь, меняйте
  * и там. Единицы: метры и секунды; время внутри — в тиках.
  */
@@ -67,8 +71,13 @@ final class World {
     static final int INPUT_CREDIT_MAX = 4;        // столько команд сверх «одна за тик» можно догнать
     static final int MAX_INPUT_QUEUE = 8;         // ≈ 270 мс при 30 Гц
 
-    /** Лимит сущностей в одном ненадёжном снапшоте: (1194 − 22) / 12 = 97 при MTU 1200. */
-    static final int MAX_SNAPSHOT_ENTITIES = 95;
+    /** Лимит бойцов в снапшоте; остальное место в пакете — под события снарядов. */
+    static final int MAX_SNAPSHOT_ENTITIES = 64;
+    /**
+     * Сколько тиков хранить события снарядов (2 с). Больше, чем живёт снаряд, — поэтому новый
+     * или переподключившийся клиент получает выстрелы всех летящих снарядов.
+     */
+    static final int SHOT_EVENT_KEEP_TICKS = 60;
 
     private final int tickRate;
     private final float dt;
@@ -83,6 +92,8 @@ final class World {
     private final List<Projectile> projectiles = new ArrayList<>();
     private final int[] teamScore = new int[2];
     private final List<SnapshotPacket.Entity> snapshotBuffer = new ArrayList<>();
+    private final List<SnapshotPacket.ShotSpawn> shotSpawns = new ArrayList<>(); // от старых к новым
+    private final List<SnapshotPacket.ShotHit> shotHits = new ArrayList<>();
     private final float[] pastPos = new float[2]; // результат PositionHistory.whereWas без выделений
     private int nextBrawlerId = 1;
     private int nextProjectileId = FIRST_PROJECTILE_ID;
@@ -117,6 +128,10 @@ final class World {
 
     Iterable<Brawler> brawlers() {
         return brawlers.values();
+    }
+
+    Iterable<Projectile> projectiles() {
+        return projectiles;
     }
 
     Brawler spawnBrawler(long playerId, int team) {
@@ -173,6 +188,7 @@ final class World {
 
     void step() {
         tick++;
+        forgetOldShotEvents();
         for (Brawler b : brawlers.values()) {
             if (b.alive) {
                 // Двигается только по командам. Нет команд (лаг, игрок отключился) — стоит,
@@ -311,8 +327,10 @@ final class World {
         p.y = b.y + dy * type.hitDistance();
         p.vx = dx * type.speed;
         p.vy = dy * type.speed;
-        p.aim = angle;
         projectiles.add(p);
+        shotSpawns.add(new SnapshotPacket.ShotSpawn(p.id, tick, Quantize.posToI16(p.x), Quantize.posToI16(p.y),
+                Quantize.angleToU16(angle), b.id, b.team,
+                type == ShotType.SUPER ? SnapshotPacket.ShotKind.SUPER : SnapshotPacket.ShotKind.NORMAL));
     }
 
     private int nextProjectileId() {
@@ -343,9 +361,10 @@ final class World {
                 if (type == ShotType.NORMAL) {
                     chargeSuper(p.ownerId, dealt); // супер от супера не заряжается
                 }
+                shotHits.add(new SnapshotPacket.ShotHit(p.id, tick));
                 it.remove();
             } else if (p.traveled >= type.range || !insideArena(p.x, p.y)) {
-                it.remove();
+                it.remove(); // конец полёта клиент считает сам — событие не нужно
             }
         }
     }
@@ -445,7 +464,32 @@ final class World {
                 b.firedAttackSeq & 0xFFFF, b.firedSuperSeq & 0xFFFF);
     }
 
-    /** Список сущностей для снапшота. Возвращает переиспользуемый список — не сохраняйте его. */
+    /**
+     * События снарядов новее {@code afterTick} (от старых к новым) — то, что клиент, подтвердивший
+     * снапшот afterTick, ещё мог не получить. Списки очищаются и заполняются заново.
+     */
+    void shotEventsAfter(long afterTick, List<SnapshotPacket.ShotSpawn> spawns, List<SnapshotPacket.ShotHit> hits) {
+        spawns.clear();
+        hits.clear();
+        for (SnapshotPacket.ShotSpawn s : shotSpawns) {
+            if (s.tick() > afterTick) {
+                spawns.add(s);
+            }
+        }
+        for (SnapshotPacket.ShotHit h : shotHits) {
+            if (h.tick() > afterTick) {
+                hits.add(h);
+            }
+        }
+    }
+
+    private void forgetOldShotEvents() {
+        long oldest = tick - SHOT_EVENT_KEEP_TICKS;
+        shotSpawns.removeIf(s -> s.tick() < oldest);
+        shotHits.removeIf(h -> h.tick() < oldest);
+    }
+
+    /** Бойцы для снапшота. Возвращает переиспользуемый список — не сохраняйте его. */
     List<SnapshotPacket.Entity> snapshotEntities() {
         snapshotBuffer.clear();
         for (Brawler b : brawlers.values()) {
@@ -457,17 +501,11 @@ final class World {
             if (b.superCharge >= SUPER_CHARGE_DAMAGE) {
                 flags |= SnapshotPacket.Flags.SUPER_READY;
             }
+            if (snapshotBuffer.size() >= MAX_SNAPSHOT_ENTITIES) {
+                break; // в реальной игре — область видимости
+            }
             snapshotBuffer.add(new SnapshotPacket.Entity(b.id, SnapshotPacket.EntityKind.BRAWLER,
                     Quantize.posToI16(b.x), Quantize.posToI16(b.y), Quantize.angleToU16(b.aim), hp, b.team, flags));
-        }
-        for (Projectile p : projectiles) {
-            if (snapshotBuffer.size() >= MAX_SNAPSHOT_ENTITIES) {
-                break; // в реальной игре — область видимости или дельта-сжатие
-            }
-            // у снаряда поле hp — id бойца-владельца: свои снаряды клиент рисует сам
-            snapshotBuffer.add(new SnapshotPacket.Entity(p.id, SnapshotPacket.EntityKind.PROJECTILE,
-                    Quantize.posToI16(p.x), Quantize.posToI16(p.y), Quantize.angleToU16(p.aim), p.ownerId, p.team,
-                    p.type == ShotType.SUPER ? SnapshotPacket.Flags.SUPER_SHOT : 0));
         }
         return snapshotBuffer;
     }

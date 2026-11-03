@@ -16,12 +16,12 @@ class PacketCodecTest {
                 new InputPacket.Command(65535, 127, -127, 40000, InputPacket.Buttons.ATTACK),
                 new InputPacket.Command(65534, 0, 5, 1, InputPacket.Buttons.SUPER | InputPacket.Buttons.DODGE, 65000, 200));
         ByteWriter w = new ByteWriter();
-        InputPacket.write(w, cmds);
-        assertEquals(2 + 2 * InputPacket.COMMAND_SIZE, w.size());
+        InputPacket.write(w, 4_000_000_000L, cmds);
+        assertEquals(6 + 2 * InputPacket.COMMAND_SIZE, w.size());
 
         ByteReader r = new ByteReader(w.toArray());
         assertEquals(MessageType.C2S_INPUT, r.u8());
-        assertEquals(cmds, InputPacket.readBody(r));
+        assertEquals(new InputPacket.Packet(4_000_000_000L, cmds), InputPacket.readBody(r));
         assertEquals(0, r.remaining());
     }
 
@@ -32,18 +32,44 @@ class PacketCodecTest {
         var entities = List.of(
                 new SnapshotPacket.Entity(1, SnapshotPacket.EntityKind.BRAWLER, -1500, 2999, 65535, 255, 1,
                         SnapshotPacket.Flags.DODGING | SnapshotPacket.Flags.SUPER_READY),
-                new SnapshotPacket.Entity(2, SnapshotPacket.EntityKind.PROJECTILE, 32767, -32768, 0, 0, 0,
-                        SnapshotPacket.Flags.SUPER_SHOT));
+                new SnapshotPacket.Entity(2, SnapshotPacket.EntityKind.BRAWLER, 32767, -32768, 0, 0, 0, 0));
+        var spawns = List.of(
+                new SnapshotPacket.ShotSpawn(300, 4_000_000_000L - 255, -50, 2999, 65535, 2, 1,
+                        SnapshotPacket.ShotKind.SUPER),
+                new SnapshotPacket.ShotSpawn(65535, 4_000_000_000L, 0, 0, 0, 255, 0, SnapshotPacket.ShotKind.NORMAL));
+        var hits = List.of(new SnapshotPacket.ShotHit(300, 4_000_000_000L - 1));
         ByteWriter w = new ByteWriter();
         SnapshotPacket.writeHeader(w, header, entities.size());
         SnapshotPacket.writeEntities(w, entities);
-        assertEquals(SnapshotPacket.HEADER_SIZE + 2 * SnapshotPacket.ENTITY_SIZE, w.size());
+        SnapshotPacket.writeShotEvents(w, header.tick(), spawns, hits);
+        assertEquals(SnapshotPacket.HEADER_SIZE + 2 * SnapshotPacket.ENTITY_SIZE + SnapshotPacket.EVENT_COUNTS_SIZE
+                + 2 * SnapshotPacket.SPAWN_SIZE + SnapshotPacket.HIT_SIZE, w.size());
 
         ByteReader r = new ByteReader(w.toArray());
         assertEquals(MessageType.S2C_SNAPSHOT, r.u8());
         var s = SnapshotPacket.readBody(r);
         assertEquals(header, s.header());
         assertEquals(entities, s.entities());
+        assertEquals(spawns, s.spawns());
+        assertEquals(hits, s.hits());
+        assertEquals(0, r.remaining());
+    }
+
+    @Test
+    void shotEventsAreCutToFitOnePacket() {
+        var header = new SnapshotPacket.Header(1000, 0, 0, 0, 0, new SnapshotPacket.OwnState(0, 0, 0, 0, 0, 0));
+        var spawns = new java.util.ArrayList<SnapshotPacket.ShotSpawn>();
+        for (int i = 0; i < 200; i++) { // 200 × 12 байт в пакет не влезут
+            spawns.add(new SnapshotPacket.ShotSpawn(256 + i, 1000 - 200 / 4 + i / 4, 0, 0, 0, 1, 0, 0));
+        }
+        ByteWriter w = new ByteWriter();
+        SnapshotPacket.writeHeader(w, header, 0);
+        SnapshotPacket.writeShotEvents(w, header.tick(), spawns, List.of(new SnapshotPacket.ShotHit(256, 990)));
+        assertTrue(w.size() <= SnapshotPacket.MAX_SIZE);
+
+        var s = SnapshotPacket.readBody(new ByteReader().wrap(w.toArray(), 1, w.size() - 1));
+        assertTrue(s.spawns().size() > 50);
+        assertEquals(spawns.get(spawns.size() - 1), s.spawns().get(s.spawns().size() - 1), "самые новые — в пакете");
     }
 
     @Test

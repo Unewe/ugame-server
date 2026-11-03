@@ -43,6 +43,8 @@ public final class Room {
     private final World world;
     private final ByteWriter entityWriter = new ByteWriter(1024);
     private final ByteWriter packetWriter = new ByteWriter(1200);
+    private final List<SnapshotPacket.ShotSpawn> shotSpawns = new ArrayList<>();
+    private final List<SnapshotPacket.ShotHit> shotHits = new ArrayList<>();
     private final long createdAt = System.currentTimeMillis();
 
     private Phase phase = Phase.WAITING;
@@ -178,9 +180,10 @@ public final class Room {
         }
     }
 
-    void handleInput(ClientSession session, List<InputPacket.Command> commands) {
+    void handleInput(ClientSession session, InputPacket.Packet packet) {
         if (phase == Phase.RUNNING && sessions.contains(session)) {
-            session.applyInputs(world, commands);
+            session.acknowledgeSnapshot(packet.ackSnapshotTick());
+            session.applyInputs(world, packet.commands());
         }
     }
 
@@ -268,6 +271,9 @@ public final class Room {
                             world.ownState(s.brawler)),
                     entities.size());
             packetWriter.bytes(entityWriter.array(), 0, entityWriter.size());
+            // события снарядов, которые этот клиент ещё не подтвердил, — повторяем до подтверждения
+            world.shotEventsAfter(s.ackedSnapshotTick(), shotSpawns, shotHits);
+            SnapshotPacket.writeShotEvents(packetWriter, world.tick(), shotSpawns, shotHits);
             s.send(packetWriter.toArray(), KcpChannel.UNRELIABLE);
         }
     }

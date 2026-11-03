@@ -2,7 +2,10 @@ package com.ugame.game.room;
 
 import com.ugame.protocol.InputPacket;
 import com.ugame.protocol.Quantize;
+import com.ugame.protocol.SnapshotPacket;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,6 +45,20 @@ final class WorldDriver {
         w.queueInput(b, cmd);
         held.put(b, cmd);
         return cmd;
+    }
+
+    /** Все события «выстрел», которые сервер сейчас хранит (от старых к новым). */
+    static List<SnapshotPacket.ShotSpawn> spawns(World w) {
+        List<SnapshotPacket.ShotSpawn> spawns = new ArrayList<>();
+        w.shotEventsAfter(-1, spawns, new ArrayList<>());
+        return spawns;
+    }
+
+    /** Все события «попадание», которые сервер сейчас хранит. */
+    static List<SnapshotPacket.ShotHit> hits(World w) {
+        List<SnapshotPacket.ShotHit> hits = new ArrayList<>();
+        w.shotEventsAfter(-1, new ArrayList<>(), hits);
+        return hits;
     }
 
     int seq(Brawler b) {

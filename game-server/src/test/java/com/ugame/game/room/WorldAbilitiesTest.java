@@ -94,9 +94,9 @@ class WorldAbilitiesTest {
         press(w, shooter, up, InputPacket.Buttons.SUPER);
         steps(w, 1);
         assertEquals(0, shooter.superCharge);
-        long superShots = w.snapshotEntities().stream()
-                .filter(e -> (e.flags() & SnapshotPacket.Flags.SUPER_SHOT) != 0).count();
-        assertTrue(superShots > 0);
+        long superShots = WorldDriver.spawns(w).stream()
+                .filter(e -> e.kind() == SnapshotPacket.ShotKind.SUPER).count();
+        assertEquals(World.SUPER_SHOTS, superShots);
         steps(w, 20);
         assertTrue(target.hp <= World.BRAWLER_MAX_HP - 3 * ShotType.SUPER.damage || !target.alive,
                 "попадает большая часть веера");
@@ -112,9 +112,8 @@ class WorldAbilitiesTest {
         press(w, b, up, InputPacket.Buttons.ATTACK);
         driver(w).input(b, 127, 0, 0f, 0);
         steps(w, 1);
-        var shot = w.snapshotEntities().stream()
-                .filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).findFirst().orElseThrow();
-        assertEquals(Quantize.angleToU16(up), shot.aim());
+        var shot = WorldDriver.spawns(w).get(0);
+        assertEquals(Quantize.angleToU16(up), shot.angle());
     }
 
     private static boolean hasFlag(World w, int id, int flag) {

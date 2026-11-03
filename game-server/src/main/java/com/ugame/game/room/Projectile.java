@@ -13,7 +13,6 @@ final class Projectile {
     float y;
     float vx;
     float vy;
-    float aim;
     float traveled;
 
     Projectile(int id, int ownerId, int team, ShotType type, float rewindTicks) {

@@ -2,7 +2,6 @@ package com.ugame.game.room;
 
 import com.ugame.game.redis.MatchTicket;
 import com.ugame.protocol.InputPacket;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -43,10 +42,10 @@ public final class RoomManager implements AutoCloseable {
         room.post(() -> room.handleJoin(session, ticket));
     }
 
-    public void input(ClientSession session, List<InputPacket.Command> commands) {
+    public void input(ClientSession session, InputPacket.Packet packet) {
         Room room = session.room();
         if (room != null) {
-            room.post(() -> room.handleInput(session, commands));
+            room.post(() -> room.handleInput(session, packet));
         }
     }
 

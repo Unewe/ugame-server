@@ -11,6 +11,8 @@ import java.util.List;
  *
  * <pre>
  * u8  type = 20
+ * u32 ackSnapshotTick  тик последнего снапшота, который клиент получил (0 — ещё ни одного):
+ *                      события снарядов до этого тика сервер больше не повторяет
  * u8  count (1..MAX_COMMANDS)
  * count × {
  *   u16 seq        номер команды (растёт на 1 каждый тик клиента, с переполнением)
@@ -55,13 +57,16 @@ public final class InputPacket {
         }
     }
 
+    /** Пакет ввода: подтверждение снапшота и команды от новой к старой. */
+    public record Packet(long ackSnapshotTick, List<Command> commands) {}
+
     /** commands — от самой новой к старой; лишние отбрасываются. */
-    public static void write(ByteWriter w, List<Command> commands) {
+    public static void write(ByteWriter w, long ackSnapshotTick, List<Command> commands) {
         int count = Math.min(commands.size(), MAX_COMMANDS);
         if (count == 0) {
             throw new IllegalArgumentException("no commands");
         }
-        w.u8(MessageType.C2S_INPUT).u8(count);
+        w.u8(MessageType.C2S_INPUT).u32(ackSnapshotTick).u8(count);
         for (int i = 0; i < count; i++) {
             Command c = commands.get(i);
             w.u16(c.seq()).i8(c.moveX()).i8(c.moveY()).u16(c.aim()).u8(c.buttons())
@@ -70,7 +75,8 @@ public final class InputPacket {
     }
 
     /** Читает пакет без байта типа (его уже прочитал диспетчер). */
-    public static List<Command> readBody(ByteReader r) {
+    public static Packet readBody(ByteReader r) {
+        long ackSnapshotTick = r.u32();
         int count = r.u8();
         if (count < 1 || count > MAX_COMMANDS) {
             throw new ByteReader.MalformedPacketException("bad command count " + count);
@@ -79,6 +85,6 @@ public final class InputPacket {
         for (int i = 0; i < count; i++) {
             list.add(new Command(r.u16(), r.i8(), r.i8(), r.u16(), r.u8(), r.u16(), r.u8()));
         }
-        return list;
+        return new Packet(ackSnapshotTick, list);
     }
 }

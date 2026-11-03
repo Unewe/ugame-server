@@ -16,6 +16,7 @@ public final class ClientSession {
     long playerId;
     String username;
     Brawler brawler;
+    private long ackedSnapshotTick = -1; // последний снапшот, который клиент подтвердил; -1 — ни одного
 
     public ClientSession(KcpConnection connection) {
         this.connection = connection;
@@ -40,6 +41,17 @@ public final class ClientSession {
 
     public void send(byte[] message, KcpChannel channel) {
         connection.send(message, channel);
+    }
+
+    long ackedSnapshotTick() {
+        return ackedSnapshotTick;
+    }
+
+    /** Клиент получил снапшот этого тика (0 — ещё ни одного). Пакеты могут прийти не по порядку. */
+    void acknowledgeSnapshot(long tick) {
+        if (tick > 0 && tick > ackedSnapshotTick) {
+            ackedSnapshotTick = tick;
+        }
     }
 
     /**

@@ -183,19 +183,8 @@ class LagCompensationTest {
         assertEquals(1, projectiles());
     }
 
-    @Test
-    void projectileCarriesOwnerIdInSnapshot() {
-        setUp();
-        shooterInput(UP, InputPacket.Buttons.ATTACK);
-        steps(1);
-        var shot = w.snapshotEntities().stream()
-                .filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).findFirst().orElseThrow();
-        assertEquals(shooter.id, shot.hp());
-        assertTrue(shot.id() >= World.FIRST_PROJECTILE_ID, "id снарядов не пересекаются с id бойцов");
-    }
-
     private long projectiles() {
-        return w.snapshotEntities().stream().filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).count();
+        return WorldDriver.spawns(w).size(); // сколько выстрелов сделано
     }
 
     /** Отмотка выстрела без тика клиента (оценка по пингу), если выполнить команду сейчас. */
