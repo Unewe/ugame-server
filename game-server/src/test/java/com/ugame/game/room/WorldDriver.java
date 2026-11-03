@@ -23,10 +23,22 @@ final class WorldDriver {
         return queue(b, moveX, moveY, Quantize.angleToU16(aim), buttons);
     }
 
+    /** Команда с тиком, который клиент показывал на экране (как шлёт MatchView). */
+    InputPacket.Command inputViewing(World.Brawler b, float aim, int buttons, double viewTick) {
+        long whole = (long) Math.floor(viewTick);
+        int frac = (int) ((viewTick - whole) * 256);
+        return queue(b, 0, 0, Quantize.angleToU16(aim), buttons, (int) (whole & 0xFFFF), frac);
+    }
+
     private InputPacket.Command queue(World.Brawler b, int moveX, int moveY, int aimU16, int buttons) {
+        return queue(b, moveX, moveY, aimU16, buttons, 0, 0);
+    }
+
+    private InputPacket.Command queue(World.Brawler b, int moveX, int moveY, int aimU16, int buttons,
+                                      int viewTick, int viewFrac) {
         int s = (seq.getOrDefault(b, 0) + 1) & 0xFFFF;
         seq.put(b, s);
-        InputPacket.Command cmd = new InputPacket.Command(s, moveX, moveY, aimU16, buttons);
+        InputPacket.Command cmd = new InputPacket.Command(s, moveX, moveY, aimU16, buttons, viewTick, viewFrac);
         w.queueInput(b, cmd);
         held.put(b, cmd);
         return cmd;

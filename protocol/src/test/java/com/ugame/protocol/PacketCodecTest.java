@@ -14,7 +14,7 @@ class PacketCodecTest {
     void inputRoundTrip() {
         var cmds = List.of(
                 new InputPacket.Command(65535, 127, -127, 40000, InputPacket.Buttons.ATTACK),
-                new InputPacket.Command(65534, 0, 5, 1, InputPacket.Buttons.SUPER | InputPacket.Buttons.DODGE));
+                new InputPacket.Command(65534, 0, 5, 1, InputPacket.Buttons.SUPER | InputPacket.Buttons.DODGE, 65000, 200));
         ByteWriter w = new ByteWriter();
         InputPacket.write(w, cmds);
         assertEquals(2 + 2 * InputPacket.COMMAND_SIZE, w.size());

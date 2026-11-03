@@ -29,8 +29,9 @@ import java.util.Map;
  * к нему RTT/2, клиент показывает чужих с задержкой интерполяции, и ещё RTT/2 летит его ввод.
  * Свои выстрелы клиент рисует сразу (предсказание), поэтому на его экране «снаряд в полёте k тиков»
  * встречается с врагами, отстающими на RTT + интерполяцию. Сервер повторяет ровно это: у каждого
- * бойца хранится история позиций, а попадание снаряда проверяется по позиции цели, отмотанной на
- * {@link #rewindTicks} стрелка. Отмотка фиксируется в момент выстрела и не больше maxRewind —
+ * бойца хранится история позиций, а попадание снаряда проверяется по позиции цели в том тике,
+ * который стрелок видел на экране (клиент присылает его в каждой команде, см. {@link #shotRewind};
+ * без него — оценка по RTT). Отмотка фиксируется в момент выстрела и не больше maxRewind —
  * при большом пинге стрелку придётся брать упреждение, зато цель не получает урон «из-за угла».
  * Рывок честен для уклоняющегося: если цель в рывке сейчас или была в рывке в отмотанный момент,
  * снаряд проходит насквозь. Цель, которая успела умереть и возродиться, по старым позициям не бьётся.
@@ -82,8 +83,10 @@ final class World {
     // --- компенсация лагов (значения по умолчанию; в бою — из RoomSettings) ---
     /** Задержка показа чужих сущностей на клиенте, тиков (MatchView.InterpDelayTicks). */
     static final int DEFAULT_INTERP_DELAY_TICKS = 3;
-    /** Дальше в прошлое не отматываем. 0 — компенсация выключена. */
-    static final int DEFAULT_MAX_REWIND_MS = 300;
+    /** Дальше в прошлое не отматываем (пинг ~350 мс). 0 — компенсация выключена. */
+    static final int DEFAULT_MAX_REWIND_MS = 500;
+    /** Запас сверх «RTT + интерполяция + очередь» для тика, присланного клиентом (джиттер). */
+    static final float REWIND_SLACK_SEC = 0.15f;
 
     // --- id сущностей ---
     // Бойцы получают id 1..255: id владельца снаряда передаётся в снапшоте одним байтом.
@@ -111,6 +114,7 @@ final class World {
     private final int attackMinTicks;      // минимум тиков сервера между выстрелами (анти-спидхак)
     private final float interpDelayTicks;
     private final float maxRewindTicks;
+    private final float rewindSlackTicks;
     private final int historySize;
     private final Map<Integer, Brawler> brawlers = new LinkedHashMap<>();
     private final List<Projectile> projectiles = new ArrayList<>();
@@ -142,6 +146,7 @@ final class World {
         this.attackMinTicks = Math.max(1, Math.round(attackCooldownTicks * (1f - ATTACK_JITTER_SLACK)));
         this.interpDelayTicks = Math.max(0, interpDelayTicks);
         this.maxRewindTicks = Math.max(0f, maxRewindMs * tickRate / 1000f);
+        this.rewindSlackTicks = REWIND_SLACK_SEC * tickRate;
         this.historySize = (int) Math.ceil(maxRewindTicks) + 2;
     }
 
@@ -186,6 +191,39 @@ final class World {
             return 0f;
         }
         return Math.min(maxRewindTicks, shooter.rttMs * tickRate / 1000f + interpDelayTicks);
+    }
+
+    /**
+     * Отмотка для выстрела этой командой, тиков.
+     *
+     * <p>Клиент присылает тик, в котором показывал врагов в момент выстрела (view). Его снаряд
+     * в возрасте a встречает на экране врагов в тике view + a. Серверный снаряд в конце тика T0 + k
+     * (T0 — тик, когда выполнена команда) имеет возраст k + 1 тиков, значит, цель надо брать в тике
+     * view + k + 1, то есть отмотка = T0 − view − 1 — постоянная на весь полёт. Ожидание в очереди,
+     * колебания пинга и сдвиги часов клиента сюда входят сами — оценивать ничего не нужно.
+     *
+     * <p>Подделать «вид из далёкого прошлого» нельзя: отмотка не больше того, что объясняет пинг
+     * игрока (RTT + интерполяция + очередь), плюс REWIND_SLACK_SEC на джиттер, и не больше maxRewind.
+     * Без тика (первые снапшоты, боты) — оценка по RTT, как раньше.
+     */
+    float shotRewind(Brawler b, QueuedCommand q) {
+        if (maxRewindTicks <= 0f) {
+            return 0f;
+        }
+        float queued = Math.max(0, tick - q.receivedTick() - 1);
+        float byRtt = b.rttMs < 0 ? -1f : b.rttMs * tickRate / 1000f + interpDelayTicks + queued;
+        InputPacket.Command cmd = q.cmd();
+        float rewind;
+        if (cmd.hasViewTick()) {
+            int back = ((int) (tick & 0xFFFF) - cmd.viewTick()) & 0xFFFF;
+            rewind = back >= 0x8000 ? 0f : back - cmd.viewFrac() / 256f - 1f; // «из будущего» — мусор
+            if (byRtt >= 0f) {
+                rewind = Math.min(rewind, byRtt + rewindSlackTicks);
+            }
+        } else {
+            rewind = Math.max(0f, byRtt);
+        }
+        return clamp(rewind, 0f, maxRewindTicks);
     }
 
     /**
@@ -288,17 +326,17 @@ final class World {
         }
         moveBrawler(b);
 
-        // Сколько команда ждала в очереди сверх обычного тика — на столько дальше в прошлом
-        // её видел стрелок; добавляем к отмотке.
-        float queued = Math.max(0, tick - q.receivedTick() - 1);
-        if (cmd.pressed(InputPacket.Buttons.ATTACK) && attackReady(b, cmd.seq())) {
+        boolean attack = cmd.pressed(InputPacket.Buttons.ATTACK) && attackReady(b, cmd.seq());
+        boolean superShot = cmd.pressed(InputPacket.Buttons.SUPER) && b.superCharge >= SUPER_CHARGE_DAMAGE;
+        float rewind = attack || superShot ? shotRewind(b, q) : 0f;
+        if (attack) {
             b.lastAttackCmdSeq = cmd.seq();
             b.lastAttackTick = tick;
-            spawnProjectile(b, b.aim, false, queued);
+            spawnProjectile(b, b.aim, false, rewind);
             b.firedAttackSeq = cmd.seq();
         }
-        if (cmd.pressed(InputPacket.Buttons.SUPER) && b.superCharge >= SUPER_CHARGE_DAMAGE) {
-            fireSuper(b, queued);
+        if (superShot) {
+            fireSuper(b, rewind);
             b.superCharge = 0;
             b.firedSuperSeq = cmd.seq();
         }
@@ -382,19 +420,18 @@ final class World {
     }
 
     /** Веер из SUPER_SHOTS снарядов, симметрично относительно прицела. */
-    private void fireSuper(Brawler b, float extraRewind) {
+    private void fireSuper(Brawler b, float rewind) {
         for (int i = 0; i < SUPER_SHOTS; i++) {
             float t = SUPER_SHOTS == 1 ? 0f : (float) i / (SUPER_SHOTS - 1) - 0.5f; // -0.5..0.5
-            spawnProjectile(b, b.aim + t * SUPER_SPREAD_RAD, true, extraRewind);
+            spawnProjectile(b, b.aim + t * SUPER_SPREAD_RAD, true, rewind);
         }
     }
 
-    private void spawnProjectile(Brawler b, float angle, boolean isSuper, float extraRewind) {
+    private void spawnProjectile(Brawler b, float angle, boolean isSuper, float rewind) {
         float speed = isSuper ? SUPER_SPEED : PROJECTILE_SPEED;
         float radius = isSuper ? SUPER_RADIUS : PROJECTILE_RADIUS;
         float dx = (float) Math.cos(angle);
         float dy = (float) Math.sin(angle);
-        float rewind = rewindTicks(b) > 0f ? Math.min(maxRewindTicks, rewindTicks(b) + extraRewind) : 0f;
         Projectile p = new Projectile(nextProjectileId(), b.id, b.team, isSuper, rewind);
         p.x = b.x + dx * (BRAWLER_RADIUS + radius);
         p.y = b.y + dy * (BRAWLER_RADIUS + radius);
@@ -418,14 +455,20 @@ final class World {
             float speed = p.isSuper ? SUPER_SPEED : PROJECTILE_SPEED;
             float range = p.isSuper ? SUPER_RANGE : PROJECTILE_RANGE;
             float hitDist = BRAWLER_RADIUS + (p.isSuper ? SUPER_RADIUS : PROJECTILE_RADIUS);
+            // Попадание проверяется по всему отрезку полёта за тик, а не по конечной точке: снаряд
+            // проходит 0,5–0,6 м за тик, и «скользящее» попадание, которое клиент видит покадрово,
+            // между точками терялось бы. Отрезок обрезан по дальности.
+            float x0 = p.x;
+            float y0 = p.y;
+            float stepLen = Math.min(speed * dt, range - p.traveled);
+            float k = stepLen / (speed * dt);
             p.x += p.vx * dt;
             p.y += p.vy * dt;
             p.traveled += speed * dt;
-            if (p.traveled > range
-                    || p.x < 0 || p.y < 0 || p.x > ARENA_WIDTH || p.y > ARENA_HEIGHT) {
-                it.remove();
-                continue;
-            }
+            float x1 = x0 + (p.x - x0) * k;
+            float y1 = y0 + (p.y - y0) * k;
+            boolean expired = p.traveled >= range
+                    || p.x < 0 || p.y < 0 || p.x > ARENA_WIDTH || p.y > ARENA_HEIGHT;
             for (Brawler target : brawlers.values()) {
                 if (!target.alive || target.team == p.team || target.dashTicksLeft > 0) {
                     continue; // мёртвых не бьём; в рывке снаряды пролетают насквозь
@@ -433,9 +476,7 @@ final class World {
                 if (!pastPosition(target, p.rewindTicks)) {
                     continue; // стрелок видел цель в рывке, мёртвой или в прошлой жизни
                 }
-                float dx = pastX - p.x;
-                float dy = pastY - p.y;
-                if (dx * dx + dy * dy <= hitDist * hitDist) {
+                if (segmentDistSq(x0, y0, x1, y1, pastX, pastY) <= hitDist * hitDist) {
                     int dealt = damage(target, p.ownerId, p.isSuper ? SUPER_DAMAGE : PROJECTILE_DAMAGE);
                     if (!p.isSuper) {
                         chargeSuper(p.ownerId, dealt);
@@ -444,7 +485,22 @@ final class World {
                     continue outer;
                 }
             }
+            if (expired) {
+                it.remove();
+            }
         }
+    }
+
+    /** Квадрат расстояния от точки (px, py) до отрезка (ax, ay)–(bx, by). */
+    static float segmentDistSq(float ax, float ay, float bx, float by, float px, float py) {
+        float abx = bx - ax;
+        float aby = by - ay;
+        float len2 = abx * abx + aby * aby;
+        float t = len2 > 0f ? ((px - ax) * abx + (py - ay) * aby) / len2 : 0f;
+        t = clamp(t, 0f, 1f);
+        float dx = ax + abx * t - px;
+        float dy = ay + aby * t - py;
+        return dx * dx + dy * dy;
     }
 
     /** Супер копится только от урона обычными выстрелами (иначе супер заряжал бы сам себя). */
