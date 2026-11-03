@@ -13,8 +13,8 @@ class ViewTickRewindTest {
 
     private World w;
     private WorldDriver d;
-    private World.Brawler shooter;
-    private World.Brawler target;
+    private Brawler shooter;
+    private Brawler target;
 
     private void setUp(float targetX, float targetY) {
         w = new World(TICK_RATE, 3, 500);
@@ -44,7 +44,7 @@ class ViewTickRewindTest {
         // снаряд долетает до y = 6 примерно за 7 тиков — значит, стрелок жал «огонь», видя тик tv − 7
         d.inputViewing(shooter, UP, InputPacket.Buttons.ATTACK, tv - 7 + 0.5);
         d.steps(20);
-        assertEquals(World.BRAWLER_MAX_HP - World.PROJECTILE_DAMAGE, target.hp);
+        assertEquals(World.BRAWLER_MAX_HP - ShotType.NORMAL.damage, target.hp);
     }
 
     @Test
@@ -67,12 +67,12 @@ class ViewTickRewindTest {
         w.setRtt(shooter, 50); // 1,5 тика + 3 интерполяции + 4,5 запаса = 9 тиков максимум
         var cmd = new InputPacket.Command(1, 0, 0, 0, InputPacket.Buttons.ATTACK,
                 (int) ((w.tick() - 14) & 0xFFFF), 0);
-        float rewind = w.shotRewind(shooter, new World.QueuedCommand(cmd, w.tick() - 1));
+        float rewind = w.shotRewind(shooter, new QueuedCommand(cmd, w.tick() - 1));
         assertEquals(9f, rewind, 0.01f);
 
         var future = new InputPacket.Command(1, 0, 0, 0, InputPacket.Buttons.ATTACK,
                 (int) ((w.tick() + 5) & 0xFFFF), 0);
-        assertEquals(0f, w.shotRewind(shooter, new World.QueuedCommand(future, w.tick() - 1)), 0f);
+        assertEquals(0f, w.shotRewind(shooter, new QueuedCommand(future, w.tick() - 1)), 0f);
     }
 
     @Test
@@ -83,7 +83,7 @@ class ViewTickRewindTest {
         var cmd = new InputPacket.Command(1, 0, 0, 0, InputPacket.Buttons.ATTACK,
                 (int) ((w.tick() - 11) & 0xFFFF), 128);
         // T0 − view − 1 = 11 − 0,5 − 1
-        assertEquals(9.5f, w.shotRewind(shooter, new World.QueuedCommand(cmd, w.tick() - 1)), 0.01f);
+        assertEquals(9.5f, w.shotRewind(shooter, new QueuedCommand(cmd, w.tick() - 1)), 0.01f);
     }
 
     /**
@@ -96,7 +96,7 @@ class ViewTickRewindTest {
         d.steps(5);
         d.input(shooter, 0, 0, UP, InputPacket.Buttons.ATTACK);
         d.steps(20);
-        assertEquals(World.BRAWLER_MAX_HP - World.PROJECTILE_DAMAGE, target.hp);
+        assertEquals(World.BRAWLER_MAX_HP - ShotType.NORMAL.damage, target.hp);
     }
 
     @Test

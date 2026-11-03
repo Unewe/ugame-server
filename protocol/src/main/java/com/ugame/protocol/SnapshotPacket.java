@@ -63,9 +63,7 @@ public final class SnapshotPacket {
 
     /** Состояние своего бойца — уходит только его владельцу. */
     public record OwnState(int superCharge, int dodgeCooldownTicks, int dashTicksLeft, int dashAngle,
-                           int lastAttackSeq, int lastSuperSeq) {
-        public static final OwnState NONE = new OwnState(0, 0, 0, 0, 0, 0);
-    }
+                           int lastAttackSeq, int lastSuperSeq) {}
 
     public record Header(long tick, int ackInputSeq, int timeLeftSec, int scoreTeam0, int scoreTeam1, OwnState own) {}
 

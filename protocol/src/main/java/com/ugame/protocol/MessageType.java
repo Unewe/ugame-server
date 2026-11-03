@@ -23,8 +23,4 @@ public final class MessageType {
     // --- unreliable, ручная упаковка ---
     public static final byte C2S_INPUT = 20;      // InputPacket
     public static final byte S2C_SNAPSHOT = 21;   // SnapshotPacket
-
-    public static boolean isReliable(byte type) {
-        return type >= 1 && type < 20;
-    }
 }

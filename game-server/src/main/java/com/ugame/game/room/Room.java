@@ -135,7 +135,7 @@ public final class Room {
             return;
         }
         // повторный вход того же игрока (переподключение): забираем его бойца себе
-        World.Brawler brawler = null;
+        Brawler brawler = null;
         for (ClientSession existing : new ArrayList<>(sessions)) {
             if (existing.playerId == ticket.playerId()) {
                 brawler = existing.brawler;
@@ -144,7 +144,7 @@ public final class Room {
             }
         }
         if (brawler == null) {
-            for (World.Brawler b : world.brawlers()) {
+            for (Brawler b : world.brawlers()) {
                 if (b.playerId == ticket.playerId()) {
                     brawler = b; // вернулся после обрыва связи
                 }
@@ -229,7 +229,7 @@ public final class Room {
 
         MatchEnd.Builder msg = MatchEnd.newBuilder().setMatchId(matchId).setWinnerTeam(winner);
         StringJoiner results = new StringJoiner(",");
-        for (World.Brawler b : world.brawlers()) {
+        for (Brawler b : world.brawlers()) {
             msg.addResults(PlayerResult.newBuilder()
                     .setPlayerId(b.playerId).setTeam(b.team).setKills(b.kills).setDeaths(b.deaths));
             results.add(b.playerId + ":" + b.team + ":" + b.kills + ":" + b.deaths);

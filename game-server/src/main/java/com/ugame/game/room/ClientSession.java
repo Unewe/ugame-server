@@ -15,7 +15,7 @@ public final class ClientSession {
     // ниже — только поток комнаты
     long playerId;
     String username;
-    World.Brawler brawler;
+    Brawler brawler;
 
     public ClientSession(KcpConnection connection) {
         this.connection = connection;

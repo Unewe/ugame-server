@@ -19,8 +19,8 @@ class LagCompensationTest {
 
     private World w;
     private WorldDriver d;
-    private World.Brawler shooter;
-    private World.Brawler target;
+    private Brawler shooter;
+    private Brawler target;
 
     private void setUp() {
         w = new World(TICK_RATE, 3, 300);
@@ -63,10 +63,10 @@ class LagCompensationTest {
     void laggingShooterHitsWhereHeSawTheTarget() {
         setUp();
         w.setRtt(shooter, 200); // 6 тиков RTT + 3 тика интерполяции
-        assertEquals(9f, w.rewindTicks(shooter), 1e-4);
+        assertEquals(9f, rewindWithoutViewTick(w, shooter), 1e-4);
         shootWhileTargetLeaves();
-        assertEquals(World.BRAWLER_MAX_HP - World.PROJECTILE_DAMAGE, target.hp);
-        assertEquals(World.PROJECTILE_DAMAGE, shooter.superCharge, "попадание в прошлом заряжает супер как обычно");
+        assertEquals(World.BRAWLER_MAX_HP - ShotType.NORMAL.damage, target.hp);
+        assertEquals(ShotType.NORMAL.damage, shooter.superCharge, "попадание в прошлом заряжает супер как обычно");
     }
 
     @Test
@@ -85,17 +85,17 @@ class LagCompensationTest {
     @Test
     void rewindIsCappedAndOffWithoutRtt() {
         w = new World(TICK_RATE, 3, 300);
-        World.Brawler b = w.spawnBrawler(1, 0);
-        assertEquals(0f, w.rewindTicks(b), "RTT ещё не измерен — без отмотки");
+        Brawler b = w.spawnBrawler(1, 0);
+        assertEquals(0f, rewindWithoutViewTick(w, b), "RTT ещё не измерен — без отмотки");
         w.setRtt(b, 0);
-        assertEquals(3f, w.rewindTicks(b), 1e-4, "пинг 0 — остаётся задержка интерполяции");
+        assertEquals(3f, rewindWithoutViewTick(w, b), 1e-4, "пинг 0 — остаётся задержка интерполяции");
         w.setRtt(b, 5000);
-        assertEquals(9f, w.rewindTicks(b), 1e-4, "не больше 300 мс");
+        assertEquals(9f, rewindWithoutViewTick(w, b), 1e-4, "не больше 300 мс");
 
         World off = new World(TICK_RATE, 3, 0);
-        World.Brawler o = off.spawnBrawler(1, 0);
+        Brawler o = off.spawnBrawler(1, 0);
         off.setRtt(o, 200);
-        assertEquals(0f, off.rewindTicks(o), "max-rewind-ms=0 выключает компенсацию");
+        assertEquals(0f, rewindWithoutViewTick(off, o), "max-rewind-ms=0 выключает компенсацию");
     }
 
     @Test
@@ -196,5 +196,11 @@ class LagCompensationTest {
 
     private long projectiles() {
         return w.snapshotEntities().stream().filter(e -> e.kind() == SnapshotPacket.EntityKind.PROJECTILE).count();
+    }
+
+    /** Отмотка выстрела без тика клиента (оценка по пингу), если выполнить команду сейчас. */
+    private static float rewindWithoutViewTick(World world, Brawler b) {
+        var cmd = new InputPacket.Command(0, 0, 0, 0, InputPacket.Buttons.ATTACK);
+        return world.shotRewind(b, new QueuedCommand(cmd, world.tick() - 1));
     }
 }

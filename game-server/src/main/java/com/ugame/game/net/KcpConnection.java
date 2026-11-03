@@ -57,7 +57,6 @@ public final class KcpConnection {
     private long lastReceiveTime;
     private long lastPingTime;
     private long lastPongTime;
-    private volatile int rttMs;
     private volatile int smoothedRttMs = -1;
     private volatile Object attachment;
 
@@ -85,10 +84,6 @@ public final class KcpConnection {
 
     public InetSocketAddress remoteAddress() {
         return remote;
-    }
-
-    public int rttMs() {
-        return rttMs;
     }
 
     /**
@@ -339,7 +334,6 @@ public final class KcpConnection {
                     int sent = msg.readIntLE();
                     int diff = localTime(now) - sent;
                     if (diff >= 0) {
-                        rttMs = diff;
                         int prev = smoothedRttMs;
                         smoothedRttMs = prev < 0 ? diff : (3 * prev + diff + 2) / 4;
                     }

@@ -20,7 +20,7 @@ class WorldAbilitiesTest {
         return d;
     }
 
-    private void press(World w, World.Brawler b, float aim, int buttons) {
+    private void press(World w, Brawler b, float aim, int buttons) {
         driver(w).input(b, 0, 0, aim, buttons);
     }
 
@@ -32,7 +32,7 @@ class WorldAbilitiesTest {
     @Test
     void dodgeDashesAndHasCooldown() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         float startY = b.y;
 
         press(w, b, (float) (Math.PI / 2), InputPacket.Buttons.DODGE); // стоим — рывок по прицелу (вверх)
@@ -56,8 +56,8 @@ class WorldAbilitiesTest {
     @Test
     void dashingBrawlerTakesNoDamage() {
         World w = new World(TICK_RATE);
-        World.Brawler shooter = w.spawnBrawler(1, 0);
-        World.Brawler target = w.spawnBrawler(2, 1);
+        Brawler shooter = w.spawnBrawler(1, 0);
+        Brawler target = w.spawnBrawler(2, 1);
         target.x = shooter.x;
         target.y = shooter.y + 3f;
 
@@ -73,8 +73,8 @@ class WorldAbilitiesTest {
     @Test
     void damageChargesSuperAndSuperFiresFan() {
         World w = new World(TICK_RATE);
-        World.Brawler shooter = w.spawnBrawler(1, 0);
-        World.Brawler target = w.spawnBrawler(2, 1);
+        Brawler shooter = w.spawnBrawler(1, 0);
+        Brawler target = w.spawnBrawler(2, 1);
         float up = (float) (Math.PI / 2);
 
         for (int hit = 0; hit < 4; hit++) {
@@ -98,7 +98,7 @@ class WorldAbilitiesTest {
                 .filter(e -> (e.flags() & SnapshotPacket.Flags.SUPER_SHOT) != 0).count();
         assertTrue(superShots > 0);
         steps(w, 20);
-        assertTrue(target.hp <= World.BRAWLER_MAX_HP - 3 * World.SUPER_DAMAGE || !target.alive,
+        assertTrue(target.hp <= World.BRAWLER_MAX_HP - 3 * ShotType.SUPER.damage || !target.alive,
                 "попадает большая часть веера");
         assertEquals(0, shooter.superCharge, "урон супером не заряжает супер");
     }
@@ -106,7 +106,7 @@ class WorldAbilitiesTest {
     @Test
     void shotKeepsAimOfPressEvenIfNextCommandArrivesSameTick() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         float up = (float) (Math.PI / 2);
         // две команды в одном тике: выстрел вверх, затем «идём вправо» с прицелом вправо
         press(w, b, up, InputPacket.Buttons.ATTACK);

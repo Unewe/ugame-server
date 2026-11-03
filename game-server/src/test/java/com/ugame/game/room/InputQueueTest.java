@@ -32,9 +32,9 @@ class InputQueueTest {
     }
 
     /** Прогоняет команды, доставляя их пачками arrivals[i] штук перед i-м тиком. */
-    private static World.Brawler play(int[] arrivals) {
+    private static Brawler play(int[] arrivals) {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         List<InputPacket.Command> cmds = clientCommands();
         int next = 0;
         for (int t = 0; t < 200; t++) {
@@ -49,9 +49,9 @@ class InputQueueTest {
 
     @Test
     void jitterDoesNotChangeTheOutcome() {
-        World.Brawler smooth = play(new int[] {1});
+        Brawler smooth = play(new int[] {1});
         // провалы и пачки, повторы старых команд — как в реальной сети с джиттером
-        World.Brawler jittery = play(new int[] {1, 0, 0, 3, 1, 0, 2, 2, 0, 0, 0, 4, 1, 1, 0, 3, 0, 2});
+        Brawler jittery = play(new int[] {1, 0, 0, 3, 1, 0, 2, 2, 0, 0, 0, 4, 1, 1, 0, 3, 0, 2});
         assertEquals(60, smooth.lastInputSeq);
         assertEquals(60, jittery.lastInputSeq);
         assertEquals(smooth.x, jittery.x, 0f);
@@ -63,7 +63,7 @@ class InputQueueTest {
     @Test
     void duplicatesAndOldCommandsAreIgnored() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         var c1 = new InputPacket.Command(1, 127, 0, 0, 0);
         var c2 = new InputPacket.Command(2, 127, 0, 0, 0);
         w.queueInput(b, c1);
@@ -81,7 +81,7 @@ class InputQueueTest {
     @Test
     void noInputMeansStandingStill() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         w.queueInput(b, new InputPacket.Command(1, 127, 0, 0, 0));
         float x0 = b.x;
         for (int i = 0; i < 30; i++) {
@@ -94,7 +94,7 @@ class InputQueueTest {
     @Test
     void sendingCommandsTooFastDoesNotMakeYouFaster() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         b.x = 1f;
         int seq = 0;
         for (int t = 0; t < 60; t++) {
@@ -110,7 +110,7 @@ class InputQueueTest {
     @Test
     void backlogIsCaughtUpQuickly() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         for (int i = 1; i <= 6; i++) { // после провала связи пришло 6 команд разом
             w.queueInput(b, new InputPacket.Command(i, 127, 0, 0, 0));
         }
@@ -122,7 +122,7 @@ class InputQueueTest {
     @Test
     void commandsSentWhileDeadAreOnlyAcked() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         b.alive = false;
         b.respawnTick = Long.MAX_VALUE;
         float x0 = b.x;
@@ -137,7 +137,7 @@ class InputQueueTest {
     @Test
     void reconnectRestartsCommandNumbering() {
         World w = new World(TICK_RATE);
-        World.Brawler b = w.spawnBrawler(1, 0);
+        Brawler b = w.spawnBrawler(1, 0);
         for (int i = 1; i <= 40; i++) {
             w.queueInput(b, new InputPacket.Command(1000 + i, 0, 0, 0, 0));
             w.step();
